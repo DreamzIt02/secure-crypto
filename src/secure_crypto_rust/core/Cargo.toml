@@ -1,0 +1,89 @@
+# 2️⃣ Core crate (PURE RUST, FAST)
+
+#📍 `src/secure_crypto_rust/core/Cargo.toml`
+
+#This crate contains:
+
+#* `stream_v2`
+#* crypto
+#* compression
+#* telemetry
+#* framing
+
+# ---------------------------------------------------------------------------
+# crypto-core
+# Pure Rust streaming crypto engine
+# ---------------------------------------------------------------------------
+[package]
+name = "crypto-core"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+
+[lib]
+name = "crypto_core"
+crate-type = ["rlib"] # pure Rust library
+
+# ---------------------------------------------------------------------------
+# Dependencies (CORE ONLY)
+# ---------------------------------------------------------------------------
+[dependencies]
+# --- Crypto primitives ---
+aes-gcm.workspace = true
+chacha20poly1305.workspace = true
+blake3.workspace = true
+hkdf.workspace = true
+sha2.workspace = true
+
+# --- Compression ---
+lz4.workspace = true
+lz4_flex.workspace = true
+zstd.workspace = true
+zstd-safe.workspace = true
+flate2.workspace = true
+
+# --- Serialization / framing ---
+byteorder.workspace = true
+crc32fast.workspace = true
+bincode.workspace = true
+
+# --- Error handling ---
+thiserror.workspace = true
+anyhow.workspace = true
+
+# --- Randomness ---
+rand.workspace = true
+
+# --- Telemetry ---
+serde.workspace = true
+serde_json.workspace = true
+
+# --- Concurrency (used by stream_v2 pipeline) ---
+crossbeam.workspace = true
+
+# --- Misc ---
+hex.workspace = true
+num_enum.workspace = true
+
+# ---------------------------------------------------------------------------
+# Dev & test dependencies (FAST)
+# ---------------------------------------------------------------------------
+[dev-dependencies]
+criterion = "0.5"
+proptest = "1.2"
+
+# ---------------------------------------------------------------------------
+# Build profiles (inherit from workspace)
+# ---------------------------------------------------------------------------
+
+### 🔑 Key design decisions
+
+#| Dependency  | Why in core?                              |
+#| ----------- | ----------------------------------------- |
+#| `crossbeam` | Lock-free queues for **true parallelism** |
+#| `bincode`   | Frame encoding                            |
+#| `serde`     | Telemetry + digest payload                |
+#| `NO tokio`  | Deterministic CPU parallelism             |
+#| `NO pyo3`   | 10× faster builds                         |
+
+#This crate is where **Segmented Encrypted Stream v2 lives**.

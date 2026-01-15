@@ -1,0 +1,68 @@
+# 3️⃣ Python crate (bindings only, slow but isolated)
+
+#📍 `src/secure_crypto_rust/python/Cargo.toml`
+
+#We **do not optimize this yet**, per your instruction.
+#Just enough to compile and link.
+
+# ---------------------------------------------------------------------------
+# crypto-python
+# PyO3 bindings over crypto-core
+# ---------------------------------------------------------------------------
+[package]
+name = "crypto-python"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+
+[lib]
+name = "rust_crypto"
+crate-type = ["cdylib"]
+
+# ---------------------------------------------------------------------------
+# Dependencies
+# ---------------------------------------------------------------------------
+[dependencies]
+crypto-core = { path = "../core" }
+
+# --- Python FFI ---
+pyo3 = { version = "0.22", features = ["extension-module"] }
+pyo3-async-runtimes = { version = "0.22", features = ["attributes", "tokio-runtime"] }
+
+# --- Async runtime (ONLY for Python I/O adapters) ---
+tokio = { version = "1.48.0", features = [
+    "rt-multi-thread",
+    "sync",
+    "io-util",
+    "fs"
+] }
+
+futures = "0.3.31"
+tokio-util = "0.7.17"
+
+# --- FFI safety ---
+libc = "0.2"
+
+# ---------------------------------------------------------------------------
+# Build profiles
+# ---------------------------------------------------------------------------
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
+
+### 🔑 Important notes
+
+#* Python crate **depends on core**, never the other way around
+#* Tokio lives **only here**
+#* PyO3 compile cost is now isolated
+
+## 4️⃣ Dependency ownership (clear mental model)
+
+#| Layer       | Allowed dependencies                    |
+#| ----------- | --------------------------------------- |
+#| `core`      | crypto, compression, framing, crossbeam |
+#| `python`    | PyO3, Tokio, async bridges              |
+#| `workspace` | version pinning only                    |

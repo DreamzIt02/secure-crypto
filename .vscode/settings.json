@@ -1,0 +1,8 @@
+{
+    "cSpell.words": [
+        "pytest"
+    ],
+    "rust-analyzer.linkedProjects": [
+        "src/secure_crypto_rust/Cargo.toml"
+    ]
+}
