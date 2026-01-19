@@ -24,7 +24,7 @@ members = [
 # Crypto
 aes-gcm = "0.10"
 chacha20poly1305 = "0.10"
-blake3 = "1.5"
+blake3 = "1.8"
 hkdf = "0.12"
 sha2 = "0.10"
 
@@ -40,6 +40,7 @@ byteorder = "1.5"
 crc32fast = "1.3"
 hex = "0.4"
 num_enum = "0.7"
+num_cpus = "1.17.0"
 rand = "0.8"
 thiserror = "1.0"
 anyhow = "1.0"

@@ -11,3 +11,9 @@ wheels/
 
 # Rust Analyzer
 src/secure_crypto_rust/target
+
+# MacOS files and hidden traits
+.DS_Store
+
+# Unfinished docs
+**/*/*-raw.md

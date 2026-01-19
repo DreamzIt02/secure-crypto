@@ -64,6 +64,7 @@ crossbeam.workspace = true
 # --- Misc ---
 hex.workspace = true
 num_enum.workspace = true
+num_cpus.workspace = true
 
 # ---------------------------------------------------------------------------
 # Dev & test dependencies (FAST)

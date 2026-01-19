@@ -1,7 +1,7 @@
 [project]
 name = "secure-crypto"
 version = "0.1.0"
-description = "Add your description here"
+description = "Secure crypto"
 readme = "README.md"
 authors = [
     { name = "Rejwanul Islam", email = "irejwanul@live.com" }

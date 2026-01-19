@@ -1,5 +1,13 @@
 {
     "cSpell.words": [
+        "Backpressure",
+        "ciphertext",
+        "ciphertexts",
+        "cpus",
+        "decryptor",
+        "maturin",
+        "pyfunction",
+        "pymodule",
         "pytest"
     ],
     "rust-analyzer.linkedProjects": [

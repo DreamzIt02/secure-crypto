@@ -2,7 +2,7 @@
 
 #📍 `src/secure_crypto_rust/python/Cargo.toml`
 
-#We **do not optimize this yet**, per your instruction.
+#We **do not optimize this yet**.
 #Just enough to compile and link.
 
 # ---------------------------------------------------------------------------
@@ -57,7 +57,7 @@ strip = true
 
 #* Python crate **depends on core**, never the other way around
 #* Tokio lives **only here**
-#* PyO3 compile cost is now isolated
+#* PyO3 compile cost is isolated
 
 ## 4️⃣ Dependency ownership (clear mental model)
 
