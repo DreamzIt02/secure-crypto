@@ -1,243 +1,244 @@
-// **production-ready, parallel DecryptSegmentWorker** that:
+// # 📂 `src/stream_v2/segment_worker/decrypt.rs`
 
-// * **Decodes frames from a segment wire buffer** (no copying beyond slices)
-// * **Dispatches frame slices to a worker pool** for parallel decrypt
-// * **Collects decrypted frames asynchronously**
-// * **Reorders decrypted frames by frame index**
-// * **Streams decrypted plaintext frames in order (zero-copy except output Vec)**
-// * **Minimal buffering — no unnecessary cloning of ciphertext**
-
-// ### Key points:
-
-// * Uses `&[u8]` slices into the segment buffer, no extra allocations per frame.
-// * Worker pool processes frame slices and returns decrypted plaintext.
-// * Main thread collects decrypted frames and orders them by `frame_index`.
-// * Supports `Digest` and `Terminator` frames for validation.
-// * Uses crossbeam channels for parallel dispatch and collection.
-// * Panics or returns errors on unexpected conditions.
-
-use crossbeam::channel::{unbounded, Receiver, Sender};
-use std::sync::Arc;
+use bytes::Bytes;
+use crossbeam::channel::{Receiver, Sender, bounded, unbounded};
 use std::thread;
 
 use crate::{
-    crypto::{DigestAlg, DigestFrame, SegmentDigestVerifier}, stream_v2::{
-        frame_worker::{DecryptedFrame, decrypt::DecryptFrameWorker}, 
+    crypto::{DigestAlg, DigestFrame, SegmentDigestVerifier}, 
+    stream_v2::{
+        frame_worker::{DecryptedFrame, FrameWorkerError, decrypt::DecryptFrameWorker}, 
         framing::{FrameError, FrameHeader, FrameType, decode::parse_frame_header}, 
-        segment_worker::{DecryptedSegment, SegmentCryptoContext, types::DigestResumePoint}
+        segment_worker::{DecryptedSegment, SegmentCryptoContext, SegmentWorkerError, types::DecryptSegmentInput}, segmenting::types::SegmentFlags
     }, telemetry::counters::TelemetryCounters
 };
 
 pub struct DecryptSegmentWorker {
     crypto: SegmentCryptoContext,
+    pub log_manager: std::sync::Arc<crate::recovery::persist::AsyncLogManager>,
 }
 
 impl DecryptSegmentWorker {
-    pub fn new(crypto: SegmentCryptoContext) -> Self {
-        Self { crypto }
+    pub fn new(
+        crypto: crate::stream_v2::segment_worker::SegmentCryptoContext,
+        log_manager: std::sync::Arc<crate::recovery::persist::AsyncLogManager>,
+    ) -> Self {
+        Self { crypto, log_manager }
     }
 
     /// Run decrypt loop.
     ///
     /// Receives segment wire bytes from `rx`, processes frames in parallel,
     /// reorders decrypted frames, verifies Digest, streams out ordered plaintext frames.
-    pub fn run(self, 
-        rx: Receiver<Arc<Vec<u8>>>, 
-        tx: Sender<DecryptedSegment>,
-        resume: Option<DigestResumePoint>,
+    pub fn run_v2(
+        self,
+        rx: Receiver<DecryptSegmentInput>,
+        tx: Sender<Result<DecryptedSegment, SegmentWorkerError>>,
     ) {
-        // Clone crypto for thread usage
         let crypto = self.crypto.clone();
 
         thread::spawn(move || {
-            // Worker pool channels: frame slices -> decrypted frames
-            let (frame_tx, frame_rx) = unbounded::<Arc<[u8]>>();
-            let (out_tx, out_rx) = unbounded::<DecryptedFrame>();
+            eprintln!("[WORKER] thread spawned");
+            let worker_count = crypto.worker_count;
+            let digest_alg = crypto.digest_alg;
 
-            // Spawn workers
-            let workers = num_cpus::get().max(1);
-            for _ in 0..workers {
+            // Frame worker pool channels
+            let (frame_tx, frame_rx) = bounded::<Bytes>(worker_count * 4);
+            let (out_tx, out_rx) = unbounded::<Result<DecryptedFrame, FrameWorkerError>>();
+
+            for i in 0..worker_count {
                 let fw = DecryptFrameWorker::new(crypto.header.clone(), &crypto.session_key)
-                    .expect("DecryptFrameWorker init failed");
-
+                    .expect("DecryptFrameWorker pool init failed");
+                eprintln!("[FRAME WORKER-{i}] starting");
                 fw.run(frame_rx.clone(), out_tx.clone());
-                // let frame_rx = frame_rx.clone();
-                // let result_tx = result_tx.clone();
-                // thread::spawn(move || {
-                //     while let Ok(frame_bytes) = frame_rx.recv() {
-                //         let decrypted = fw.decrypt_frame(&frame_bytes)
-                //             .expect("frame decryption failed");
-                //         result_tx.send(decrypted).expect("result channel closed");
-                //     }
-                // });
             }
             drop(frame_rx);
             drop(out_tx);
 
-            // Main loop: handle incoming segments
-            while let Ok(segment_wire) = rx.recv() {
-                let telemetry = &mut TelemetryCounters::default();
-
-                // 1️⃣ Split segment into frame byte slices (NO decode)
-                let ranges = self.split_frames(&segment_wire)
-                    .expect("invalid segment framing");
-
-                let frame_count = ranges.len();
-                if frame_count < 1 { 
-                    // Segment-level validation 
-                    eprintln!("SegmentWorker error: empty segment");
-                    // You can choose to panic, drop, or send an error marker downstream. 
-                    continue; 
-                }
-                // continue with normal encryption...
-                let resume_from = resume.map(|r| r.next_frame_index).unwrap_or(0);
-
-                // 2️⃣ Dispatch frames (parallel decrypt)
-                for r in &ranges {
-                    frame_tx
-                        .send(Arc::from(&segment_wire[r.clone()]))
-                        .expect("frame tx closed");
-                }
-                // 3️⃣ Collect decrypted frames (unordered)
-                let mut data_frames = Vec::new();
-                let mut digest_frame: Option<DigestFrame> = None;
-
-                for _ in 0..frame_count {
-                    let f = out_rx.recv().expect("decrypt failed");
-
-                    match f.frame_type {
-                        FrameType::Data => {
-                            // telemetry.frames_data += 1;
-                            // telemetry.bytes_plaintext += f.plaintext.len() as u64;
-                            data_frames.push(f);
-                        }
-                        FrameType::Digest => {
-                            let df = DigestFrame::decode(&f.plaintext)
-                                .expect("invalid digest frame");
-                            // telemetry.frames_digest += 1;
-                            digest_frame = Some(df);
-                        }
-                        FrameType::Terminator => {
-                            telemetry.frames_terminator += 1;
-                        }
-                    }
-                }
-                
-                // 4️⃣ Sort decrypted DATA frames by frame_index
-                data_frames.sort_unstable_by_key(|f| f.frame_index);
-                // FIXME:
-                let data_frame_count = data_frames.len() as u32;
-                let segment_index = data_frames
-                    .get(0)
-                    .map(|f| f.segment_index)
-                    .unwrap_or(0);
-
-                
-                // 5️⃣ Streaming digest verification (SKIP old frames)
-                let digest_frame_build = digest_frame.expect("missing digest frame");
-                
-                let mut verifier = SegmentDigestVerifier::new(
-                    DigestAlg::Sha256,
-                    segment_index,
-                    data_frame_count,
-                    digest_frame_build.digest,
+            // Main loop: process encrypted segments
+            while let Ok(segment) = rx.recv() {
+                eprintln!("[WORKER] processing segment {}", segment.header.segment_index);
+                let result = process_decrypt_segment_v2(
+                    &segment,
+                    &digest_alg,
+                    &frame_tx,
+                    &out_rx,
                 );
 
-                for f in &data_frames {
-                    if f.frame_index < resume_from {
-                        continue; // already authenticated earlier
-                    }
-                    verifier.update_frame(f.frame_index, &f.ciphertext);
-
-                    telemetry.frames_data += 1;
-                    telemetry.bytes_plaintext += f.plaintext.len() as u64;
-
-                    // plaintext_out.push(f.plaintext.clone());
-                }
-
-                // 6️⃣ Verify digest AFTER Digest frame arrives
-                verifier.finalize().expect("digest mismatch");
-                telemetry.frames_digest += 1;
-
-                // 5️⃣ Emit decrypted segment with ordered plaintext frames
-                let plaintext = data_frames.into_iter().map(|f| f.plaintext).collect();
-
-                let out = DecryptedSegment {
-                    segment_index,
-                    frames: plaintext,
-                    telemetry: telemetry.clone(),
-                };
-
-                // 7️⃣ Emit plaintext
-                if tx.send(out).is_err() {
-                    return; // Receiver dropped, shutdown
+                // Send result (Ok or Err) - let caller decide how to handle errors
+                if tx.send(result).is_err() {
+                    eprintln!("[WORKER] tx send failed, receiver gone");
+                    // Receiver dropped, exit cleanly
+                    return;
                 }
             }
+            eprintln!("[WORKER] rx closed, dropping frame_tx and exiting");
+            drop(frame_tx);
+            drop(tx);
         });
     }
 
-    // # 1️⃣ Formalizing `split_frames()` (framing module only)
-
-    // ## Design goals
-
-    // * **Single responsibility**: locate frame boundaries
-    // * **No decryption**
-    // * **No AEAD**
-    // * **No allocation**
-    // * **Zero-copy**
-    // * **No dependency on `DecryptSegmentWorker`**
-
-    // This function is allowed to:
-
-    // * Read frame headers
-    // * Read `ciphertext_len`
-    // * Validate framing integrity
-
-    // This function is **not allowed** to:
-
-    // * Classify frame types
-    // * Decode ciphertext
-    // * Perform crypto
-
-    /// Zero-copy frame boundary detection
-    ///
-    /// Returns byte ranges covering complete frames:
-    /// [FrameHeader | ciphertext]
-    pub fn split_frames(&self, segment: &[u8]) -> Result<Vec<std::ops::Range<usize>>, FrameError> {
-
-        let mut ranges = Vec::new();
-        let mut offset = 0usize;
-
-        while offset < segment.len() {
-            // Must have at least header
-            if segment.len() - offset < FrameHeader::LEN {
-                return Err(FrameError::Truncated);
-            }
-
-            // Decode header ONLY to get ciphertext_len
-            let header = parse_frame_header(&segment[offset..])?;
-            let frame_len = FrameHeader::LEN + header.ciphertext_len as usize;
-
-            let end = offset + frame_len;
-            if end > segment.len() {
-                return Err(FrameError::Truncated);
-            }
-
-            ranges.push(offset..end);
-            offset = end;
-        }
-
-        Ok(ranges)
-    }
-    
 }
 
-// ### Notes:
+/// Process a single encrypted segment into plaintext
+fn process_decrypt_segment_v2(
+    input: &DecryptSegmentInput,
+    digest_alg: &DigestAlg,
+    frame_tx: &Sender<Bytes>,
+    out_rx: &Receiver<Result<DecryptedFrame, FrameWorkerError>>,
+) -> Result<DecryptedSegment, SegmentWorkerError> {
+    let mut telemetry = TelemetryCounters::default();
+    eprintln!("[DECRYPT] Entering process_decrypt_segment_v2 for segment {}", input.header.segment_index);
 
-// * Uses `Arc<Vec<u8>>` for segment wire to share buffer slices cheaply without copy.
-// * Extracts each frame as an `Arc<[u8]>` slice into segment buffer (zero-copy).
-// * DecryptFrameWorker decrypts frames in parallel worker threads.
-// * Digest and Terminator frames are handled synchronously after data frames decrypt.
-// * We must implement the digest validation by incremental hashing of decrypted frames plaintext ourself (this is application-specific).
-// * Assumes `FrameHeader::LEN` and `decode_frame()` exist and work as specified.
+    // ✅ Empty final segment case
+    if input.wire.is_empty() && input.header.flags.contains(SegmentFlags::FINAL_SEGMENT) {
+        eprintln!("[DECRYPT] Empty FINAL_SEGMENT detected at index {}", input.header.segment_index);
+        return Ok(DecryptedSegment {
+            header: input.header.clone(),
+            frames: Vec::new(), // no plaintext frames
+            telemetry,
+        });
+    }
 
+    // 1️⃣ Locate frame boundaries (zero-copy)
+    let mut offset = 0;
+    let mut frame_count: usize = 0;
+    eprintln!("[DECRYPT] Parsing frame headers from wire, len={}", input.wire.len());
+
+    while offset < input.wire.len() {
+        let header = parse_frame_header(&input.wire[offset..])?;
+        let frame_len = FrameHeader::LEN + header.ciphertext_len as usize;
+        let end = offset + frame_len;
+
+        if end > input.wire.len() {
+            eprintln!("[DECRYPT] Frame truncated at offset {}", offset);
+            return Err(FrameError::Truncated.into());
+        }
+
+        eprintln!("[DECRYPT] Dispatching frame {} (segment {}, len={})",
+                  frame_count, input.header.segment_index, frame_len);
+        // 2️⃣ Dispatch all frames for parallel decryption
+        // 🔥 O(1) slice
+        frame_tx.send(input.wire.slice(offset..end))
+            .map_err(|_| SegmentWorkerError::FrameWorkerError(FrameWorkerError::WorkerDisconnected))?;
+
+        offset = end;
+        frame_count += 1;
+    }
+
+    if frame_count == 0 {
+        eprintln!("[DECRYPT] No frames found in non-final segment {}", input.header.segment_index);
+        return Err(SegmentWorkerError::InvalidSegment("Empty segment".into()));
+    }
+
+    // 3️⃣ Collect decrypted frames (unordered)
+    let mut data_frames = Vec::with_capacity(frame_count.saturating_sub(2));
+    let mut digest_frame: Option<DecryptedFrame> = None;
+    let mut terminator_frame: Option<DecryptedFrame> = None;
+    let mut received = 0;
+
+    eprintln!("[DECRYPT] Collecting {} decrypted frames", frame_count);
+
+    while received < frame_count {
+        match out_rx.recv() {
+            Ok(Ok(frame)) => {
+                received += 1;
+                eprintln!("[DECRYPT] Received frame type {:?}, index {}",
+                          frame.frame_type, frame.frame_index);
+                match frame.frame_type {
+                    FrameType::Data => data_frames.push(frame),
+                    FrameType::Digest => {
+                        if digest_frame.is_some() {
+                            return Err(SegmentWorkerError::InvalidSegment("Multiple digest frames".into()));
+                        }
+                        digest_frame = Some(frame);
+                    }
+                    FrameType::Terminator => {
+                        if terminator_frame.is_some() {
+                            return Err(SegmentWorkerError::InvalidSegment("Multiple terminator frames".into()));
+                        }
+                        terminator_frame = Some(frame);
+                    }
+                }
+            }
+            Ok(Err(e)) => {
+                eprintln!("[DECRYPT] Frame worker error: {:?}", e);
+                return Err(e.into());
+            }
+            Err(_) => {
+                eprintln!("[DECRYPT] Frame worker channel disconnected");
+                return Err(SegmentWorkerError::FrameWorkerError(FrameWorkerError::WorkerDisconnected));
+            }
+        }
+    }
+
+    // Validate frame counts, data_frames + digest_frame + terminator_frame
+    if (data_frames.len() + 2) != frame_count as usize {
+        eprintln!("[DECRYPT] Invalid frame count: data={} total={}", data_frames.len(), frame_count);
+        return Err(SegmentWorkerError::InvalidSegment("Invalid number of frames received".into()));
+    }
+
+    // 4️⃣ Sort decrypted DATA frames by frame_index
+    data_frames.sort_unstable_by_key(|f| f.frame_index);
+    eprintln!("[DECRYPT] Sorted {} data frames", data_frames.len());
+
+    let data_frame_count = data_frames.len() as u32;
+    let segment_index = data_frames.first().map(|f| f.segment_index).unwrap_or(0);
+
+    let digest_frame_data = digest_frame.ok_or(SegmentWorkerError::MissingDigestFrame)?;
+    if digest_frame_data.frame_index != data_frame_count {
+        eprintln!("[DECRYPT] Digest frame index mismatch: expected {}, got {}",
+                  data_frame_count, digest_frame_data.frame_index);
+        return Err(SegmentWorkerError::InvalidSegment("Invalid digest frame index".into()));
+    }
+
+    let digest_frame_payload = DigestFrame::decode(&digest_frame_data.plaintext)?;
+    eprintln!("[DECRYPT] Digest frame decoded, verifying segment {}", segment_index);
+
+    // 5️⃣ Authenticated digest Logic
+    let mut verifier = SegmentDigestVerifier::new(
+        digest_alg.clone(),
+        segment_index,
+        data_frame_count,
+        digest_frame_payload.digest,
+    );
+
+    // 6️⃣ Update Verifier and collect plaintext
+    let mut plaintext_out: Vec<Bytes> = Vec::with_capacity(data_frames.len());
+   
+    for frame in data_frames {
+        // Always update telemetry
+        telemetry.bytes_ciphertext += frame.ciphertext().len() as u64;
+        telemetry.frames_data += 1;
+        telemetry.bytes_plaintext += frame.plaintext.len() as u64;
+
+        verifier.update_frame(frame.frame_index, frame.ciphertext());
+        plaintext_out.push(frame.plaintext);
+    }
+
+    // 7️⃣ Cryptographic finalization
+    verifier.finalize()?; // may fail if digest mismatch
+    telemetry.frames_digest += 1;
+    telemetry.bytes_overhead += digest_frame_data.plaintext.len() as u64;
+    eprintln!("[DECRYPT] Digest verified for segment {}", segment_index);
+
+    // 8️⃣ Terminator
+    let terminator_frame_data = terminator_frame.ok_or(SegmentWorkerError::MissingTerminatorFrame)?;
+    if terminator_frame_data.frame_index != data_frame_count + 1 {
+        eprintln!("[DECRYPT] Terminator frame index mismatch: expected {}, got {}",
+                  data_frame_count + 1, terminator_frame_data.frame_index);
+        return Err(SegmentWorkerError::InvalidSegment("Terminator frame should be the last frame of a segment".into()));
+    }
+    telemetry.frames_terminator += 1;
+    telemetry.bytes_overhead += terminator_frame_data.plaintext.len() as u64;
+    eprintln!("[DECRYPT] Terminator frame validated for segment {}", segment_index);
+
+    // 9️⃣ 
+    // 🔟 Return decrypted segment
+    eprintln!("[DECRYPT] Returning decrypted segment {}", segment_index);
+    Ok(DecryptedSegment {
+        header: input.header.clone(),
+        frames: plaintext_out,
+        telemetry,
+    })
+}

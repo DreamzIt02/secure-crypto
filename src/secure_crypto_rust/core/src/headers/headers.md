@@ -129,7 +129,7 @@ pub struct HeaderV1 {
 ```text
 constants.rs
    ↑
-types.rs
+types.rs, utils.rs
    ↑
 headers     →     compression
 ```

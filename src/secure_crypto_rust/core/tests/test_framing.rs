@@ -6,26 +6,22 @@
 // * `decode_frame`
 // * `decode_frame_explicit`
 
-// These tests **assume no undefined behavior**, no fuzz magic, and match your exact wire format.
-
-
 #[cfg(test)]
 mod tests {
-    use crypto_core::stream_v2::framing::{decode::{decode_frame, decode_frame_explicit, decode_frame_header, parse_frame_header}, encode::encode_frame, types::{
-        FRAME_VERSION, FrameError, FrameHeader, FrameRecord, FrameType
+    use crypto_core::stream_v2::framing::{decode::{decode_frame, decode_frame_header, parse_frame_header}, encode::encode_frame, types::{
+        FRAME_VERSION, FrameError, FrameHeader, FrameView, FrameType
     }};
 
-    fn sample_record() -> FrameRecord {
-        FrameRecord {
+    fn sample_record() -> FrameView<'static> {
+        FrameView {
             header: FrameHeader {
                 frame_type: FrameType::Data,
                 segment_index: 42,
                 frame_index: 7,
                 plaintext_len: 1024,
-                compressed_len: 900,
                 ciphertext_len: 16,
             },
-            ciphertext: b"0123456789ABCDEF".to_vec(),
+            ciphertext: b"0123456789ABCDEF",
         }
     }
 
@@ -35,25 +31,11 @@ mod tests {
     fn encode_decode_roundtrip() {
         let record = sample_record();
 
-        let wire = encode_frame(&record).unwrap();
+        let wire = encode_frame(&record.header, record.ciphertext).unwrap();
         let decoded = decode_frame(&wire).unwrap();
 
         assert_eq!(decoded.header, record.header);
         assert_eq!(decoded.ciphertext, record.ciphertext);
-    }
-
-// # ✅ 2. Explicit decode matches fast decode
-
-    #[test]
-    fn decode_explicit_matches_fast_decode() {
-        let record = sample_record();
-        let wire = encode_frame(&record).unwrap();
-
-        let a = decode_frame(&wire).unwrap();
-        let b = decode_frame_explicit(&wire).unwrap();
-
-        assert_eq!(a.header, b.header);
-        assert_eq!(a.ciphertext, b.ciphertext);
     }
 
 // # ✅ 3. Header-only decode correctness
@@ -61,7 +43,7 @@ mod tests {
     #[test]
     fn parse_frame_header_only() {
         let record = sample_record();
-        let wire = encode_frame(&record).unwrap();
+        let wire = encode_frame(&record.header, record.ciphertext).unwrap();
 
         let header = parse_frame_header(&wire).unwrap();
         assert_eq!(header, record.header);
@@ -72,7 +54,7 @@ mod tests {
     #[test]
     fn decode_frame_header_aliases_parse() {
         let record = sample_record();
-        let wire = encode_frame(&record).unwrap();
+        let wire = encode_frame(&record.header, record.ciphertext).unwrap();
 
         let a = parse_frame_header(&wire).unwrap();
         let b = decode_frame_header(&wire).unwrap();
@@ -96,7 +78,7 @@ mod tests {
     #[test]
     fn invalid_magic_is_rejected() {
         let record = sample_record();
-        let mut wire = encode_frame(&record).unwrap();
+        let mut wire = encode_frame(&record.header, record.ciphertext).unwrap();
 
         wire[0..4].copy_from_slice(b"BAD!");
 
@@ -111,7 +93,7 @@ mod tests {
     #[test]
     fn unsupported_version_is_rejected() {
         let record = sample_record();
-        let mut wire = encode_frame(&record).unwrap();
+        let mut wire = encode_frame(&record.header, record.ciphertext).unwrap();
 
         wire[4] = FRAME_VERSION + 1;
 
@@ -129,7 +111,7 @@ mod tests {
         record.header.ciphertext_len = 32; // lie
 
         assert!(matches!(
-            encode_frame(&record),
+            encode_frame(&record.header, record.ciphertext),
             Err(FrameError::LengthMismatch { .. })
         ));
     }
@@ -140,7 +122,7 @@ mod tests {
     #[test]
     fn ciphertext_length_mismatch_extra_bytes() {
         let record = sample_record();
-        let mut wire = encode_frame(&record).unwrap();
+        let mut wire = encode_frame(&record.header, record.ciphertext).unwrap();
 
         wire.push(0xAA);
 
@@ -154,19 +136,18 @@ mod tests {
 
     #[test]
     fn zero_length_ciphertext_is_allowed() {
-        let record = FrameRecord {
+        let record = FrameView {
             header: FrameHeader {
                 frame_type: FrameType::Data,
-                segment_index: 0,
-                frame_index: 0,
-                plaintext_len: 0,
-                compressed_len: 0,
+                segment_index: 42,
+                frame_index: 7,
+                plaintext_len: 1024,
                 ciphertext_len: 0,
             },
-            ciphertext: Vec::new(),
+            ciphertext: b"",
         };
 
-        let wire = encode_frame(&record).unwrap();
+        let wire = encode_frame(&record.header, record.ciphertext).unwrap();
         let decoded = decode_frame(&wire).unwrap();
 
         assert!(decoded.ciphertext.is_empty());
@@ -177,7 +158,7 @@ mod tests {
     #[test]
     fn invalid_frame_type_is_rejected() {
         let record = sample_record();
-        let mut wire = encode_frame(&record).unwrap();
+        let mut wire = encode_frame(&record.header, record.ciphertext).unwrap();
 
         // overwrite frame_type byte
         wire[5] = 0xFF;
@@ -193,10 +174,11 @@ mod tests {
     #[test]
     fn encode_frame_detects_internal_length_bug() {
         let mut record = sample_record();
-        let _ = record.ciphertext.pop(); // mismatch header vs data
+        let len = record.ciphertext.len();
+        record.ciphertext = &record.ciphertext[0..len - 1]; // mismatch header vs data
 
         assert!(matches!(
-            encode_frame(&record),
+            encode_frame(&record.header, record.ciphertext),
             Err(FrameError::LengthMismatch { .. })
         ));
     }

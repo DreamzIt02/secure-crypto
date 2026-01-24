@@ -17,7 +17,7 @@ pub mod decode;
 
 pub use types::{
     FrameHeader,
-    FrameRecord,
+    FrameView,
     FrameType,
     FrameError,
 };

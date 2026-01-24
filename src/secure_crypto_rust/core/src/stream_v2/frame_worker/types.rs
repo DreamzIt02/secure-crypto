@@ -1,27 +1,54 @@
 use std::fmt;
+use bytes::Bytes;
 
-use crate::crypto::DigestFrame;
 use crate::stream_v2::framing::types::{FrameError, FrameType};
 use crate::crypto::types::{CryptoError, NonceError, AadError};
 
 #[derive(Debug)]
 pub enum FrameWorkerError {
+    InvalidInput(String),
+    CryptoFailure(String),
+    InvalidHeader,
+    WorkerDisconnected,
+    WorkerMissing,
+    
     Crypto(CryptoError),
     Nonce(NonceError),
     Aad(AadError),
     Framing(FrameError),
-    InvalidInput(String),
 }
+// #[derive(Debug, Error)]
+// pub enum FrameWorkerError {
+    // #[error("AEAD encryption failed: {0}")]
+    // EncryptionFailed(#[from] CryptoError),
+    
+    // #[error("AEAD decryption failed: {0}")]
+    // DecryptionFailed(CryptoError),
+    
+    // #[error("Frame parsing error: {0}")]
+    // FrameParsing(#[from] FrameError),
+    
+    // #[error("Invalid frame header")]
+    // InvalidHeader,
+    
+    // #[error("Frame type conversion error")]
+    // InvalidFrameType,
+// }
 
 impl fmt::Display for FrameWorkerError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         use FrameWorkerError::*;
         match self {
+            InvalidInput(msg) => write!(f, "invalid input: {}", msg),
+            CryptoFailure(msg) => write!(f, "crypto failure: {}", msg),
+            WorkerDisconnected => write!(f, "fatal error: {}", "Frame worker disconnected unexpectedly"),
+            WorkerMissing => write!(f, "fatal error: {}", "Frame worker is not allocated"),
+            InvalidHeader => write!(f, "invalid header: {}", "Invalid frame header"),
+
             Crypto(e) => write!(f, "crypto error: {}", e),
             Nonce(e) => write!(f, "nonce error: {}", e),
             Aad(e) => write!(f, "aad error: {}", e),
             Framing(e) => write!(f, "framing error: {}", e),
-            InvalidInput(msg) => write!(f, "invalid input: {}", msg),
         }
     }
 }
@@ -58,7 +85,7 @@ pub struct FrameInput {
     pub segment_index: u64,
     pub frame_index: u32,
     pub frame_type: FrameType,
-    pub plaintext: Vec<u8>,
+    pub plaintext: Bytes, // 🔥 instead of Arc<[u8]>
 }
 
 // ## ✅ Policy for `FrameType::Digest`
@@ -115,8 +142,18 @@ pub struct EncryptedFrame {
     pub segment_index: u64,
     pub frame_index: u32,
     pub frame_type: FrameType,
-    pub ciphertext: Vec<u8>,
-    pub wire: Vec<u8>,
+    
+    /// Shared ownership of the full wire frame
+    pub wire: Bytes,
+    /// Ciphertext view inside `wire`
+    pub ct_range: std::ops::Range<usize>,
+}
+
+impl EncryptedFrame {
+    #[inline]
+    pub fn ciphertext(&self) -> &[u8] {
+        &self.wire[self.ct_range.clone()]
+    }
 }
 
 /// Output of decryption
@@ -125,6 +162,23 @@ pub struct DecryptedFrame {
     pub segment_index: u64,
     pub frame_index: u32,
     pub frame_type: FrameType,
-    pub ciphertext: Vec<u8>,
-    pub plaintext: Vec<u8>,
+
+    /// Shared ownership of the full wire frame
+    pub wire: Bytes,
+    /// Ciphertext view inside `wire`
+    pub ct_range: std::ops::Range<usize>,
+
+    /// Decrypted plaintext
+    pub plaintext: Bytes,
 }
+
+impl DecryptedFrame {
+    #[inline]
+    pub fn ciphertext(&self) -> &[u8] {
+        &self.wire[self.ct_range.clone()]
+    }
+}
+// ✔ digest-safe
+// ✔ zero-copy ciphertext
+// ✔ reorderable
+// ✔ lifetime-safe

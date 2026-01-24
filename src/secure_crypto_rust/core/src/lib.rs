@@ -8,12 +8,16 @@
 // Shared and top level
 pub mod constants;
 pub mod types;
+pub mod utils;
 
 // Shared and top level module
 pub mod compression;
 pub mod headers;
 pub mod crypto;
 pub mod telemetry;
+
+pub mod recovery;
+pub mod scheduler;
 
 // Stream layers
 pub mod stream_v2;

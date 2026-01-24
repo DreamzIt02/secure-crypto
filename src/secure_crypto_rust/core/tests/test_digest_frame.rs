@@ -4,6 +4,7 @@
 
 #[cfg(test)]
 mod tests {
+    use bytes::Bytes;
     use crypto_core::{crypto::{DigestAlg, DigestError, DigestFrame}, stream_v2::{frame_worker::{FrameInput, FrameWorkerError}, framing::FrameType}};
 
     fn make_digest_frame(alg: DigestAlg, digest: &[u8]) -> FrameInput {
@@ -21,7 +22,7 @@ mod tests {
             frame_type: FrameType::Digest,
             segment_index: 0,
             frame_index: 0,
-            plaintext: digest_plaintext,
+            plaintext: Bytes::from(digest_plaintext),
         }
     }
     #[test]
@@ -62,7 +63,7 @@ mod tests {
             frame_type: FrameType::Digest,
             segment_index: 0,
             frame_index: 0,
-            plaintext: vec![0x01, 0x02], // only 2 bytes
+            plaintext: Bytes::from(vec![0x01, 0x02]), // only 2 bytes
         };
         let err = frame.validate().unwrap_err();
         assert!(matches!(err, FrameWorkerError::InvalidInput(msg) if msg.contains("too short")));
@@ -79,7 +80,7 @@ mod tests {
             frame_type: FrameType::Digest,
             segment_index: 0,
             frame_index: 0,
-            plaintext: buf,
+            plaintext: Bytes::from(buf),
         };
         let err = DigestFrame::decode(&frame.plaintext).unwrap_err();
         assert!(matches!(
@@ -99,7 +100,7 @@ mod tests {
             frame_type: FrameType::Digest,
             segment_index: 0,
             frame_index: 0,
-            plaintext: buf,
+            plaintext: Bytes::from(buf),
         };
         let err = DigestFrame::decode(&frame.plaintext).unwrap_err();
          assert!(matches!(

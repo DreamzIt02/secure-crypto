@@ -6,7 +6,7 @@ pub const FRAME_VERSION: u8 = 1;
 
 /// Frame type identifiers for the envelope.
 #[repr(u16)]
-#[derive(Copy, Clone, Debug, PartialEq, Eq, TryFromPrimitive)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, TryFromPrimitive)]
 pub enum FrameType {
     Data       = 0x0001,
     Terminator = 0x0002,
@@ -66,15 +66,13 @@ impl FrameType {
 /// Canonical frame header (fixed size)
 ///
 /// All fields are little-endian.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FrameHeader {
-    pub frame_type: FrameType,
     pub segment_index: u64,
     pub frame_index: u32,
+    pub frame_type: FrameType,
     /// Plaintext length in this frame (DATA only; last frame may be < chunk_size).
     pub plaintext_len: u32,
-    /// Compressed bytes in this frame (DATA only).
-    pub compressed_len: u32,
     /// Ciphertext bytes in this frame (DATA only).
     pub ciphertext_len: u32,
 }
@@ -86,7 +84,6 @@ impl FrameHeader {
         + 8                  // segment_index
         + 4                  // frame_index
         + 4                  // plaintext_len
-        + 4                  // compressed_len
         + 4;                 // ciphertext_len
 
     /// Summary: Construct a zeroed header (not valid until fields are set).
@@ -97,10 +94,22 @@ impl FrameHeader {
             segment_index: 0,
             frame_index: 0,
             plaintext_len: 0,
-            compressed_len: 0,
             ciphertext_len: 0,
         }
     }
+
+    /// Canonical header for tests.
+    /// Guaranteed to pass `validate()` unless a regression is introduced.
+    pub fn test_header(frame_type: FrameType, segment_index: u64) -> Self {
+        Self {
+            frame_type: frame_type,
+            segment_index: segment_index,
+            frame_index: 0,
+            plaintext_len: 0,
+            ciphertext_len: 0,
+        }
+    }
+
     // ### 1. Add helpers to `FrameHeader`
 
     /// Convert raw u16 → FrameType enum
@@ -125,12 +134,18 @@ impl FrameHeader {
 
 }
 
-/// Full frame record
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct FrameRecord {
+// ## 1️⃣ Replace `FrameRecord` with a *borrowed* view
+#[derive(Debug, Clone, Copy)]
+pub struct FrameView<'a> {
     pub header: FrameHeader,
-    pub ciphertext: Vec<u8>,
+    pub ciphertext: &'a [u8],
 }
+// ✔ decode-safe
+// ✔ digest-safe
+// ✔ no allocation
+// ✔ lifetime-bound
+// ✔ zero-copy
+
 
 #[derive(Debug)]
 pub enum FrameError {

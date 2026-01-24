@@ -20,6 +20,7 @@ use crate::telemetry::timers::{TelemetryTimer, StageTimes, Stage};
 /// Captures counters, ratios, throughput, stage timings, and elapsed duration.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TelemetrySnapshot {
+    pub segments_processed: u64,
     pub frames_data: u64,
     pub frames_terminator: u64,
     pub frames_digest: u64,
@@ -34,7 +35,7 @@ pub struct TelemetrySnapshot {
 }
 
 impl TelemetrySnapshot {
-    pub fn from(counters: &TelemetryCounters, timer: &TelemetryTimer) -> Self {
+    pub fn from(counters: &TelemetryCounters, timer: &TelemetryTimer, segments: Option<u64>) -> Self {
         let elapsed = timer.elapsed();
 
         let mut compression_ratio = if counters.bytes_plaintext > 0 {
@@ -51,6 +52,7 @@ impl TelemetrySnapshot {
         };
 
         Self {
+            segments_processed: segments.unwrap_or_default(),
             frames_data: counters.frames_data,
             frames_terminator: counters.frames_terminator,
             frames_digest: counters.frames_digest,

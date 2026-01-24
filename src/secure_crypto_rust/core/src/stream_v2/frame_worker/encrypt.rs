@@ -1,3 +1,6 @@
+// # 📂 `src/stream_v2/frame_worker/encrypt.rs`
+
+use bytes::Bytes;
 use crossbeam::channel::{Receiver, Sender};
 use crate::crypto::types::AadHeader;
 use crate::crypto::{
@@ -7,9 +10,6 @@ use crate::crypto::{
 };
 use crate::headers::types::{HeaderV1};
 use crate::stream_v2::framing::{FrameHeader, FrameType};
-use crate::stream_v2::framing::types::{
-    FrameRecord
-};
 use crate::stream_v2::framing::encode::encode_frame;
 use super::types::{FrameInput, FrameWorkerError, EncryptedFrame};
 
@@ -26,7 +26,7 @@ impl EncryptFrameWorker {
 
     pub fn encrypt_frame(
         &self,
-        input: FrameInput,
+        input: &FrameInput,
     ) -> Result<EncryptedFrame, FrameWorkerError> {
         // validate input
         input.validate()?;
@@ -49,64 +49,68 @@ impl EncryptFrameWorker {
         )?;
 
         // 3️⃣ Encrypt
-        let ciphertext: Vec<u8>;
-        match input.frame_type {
+        let ciphertext: Vec<u8> = match input.frame_type {
             FrameType::Data | FrameType::Digest => {
                 // normal encryption path
-                ciphertext = self.aead.seal(&nonce, &aad, &input.plaintext)?;
+                self.aead.seal(&nonce, &aad, &input.plaintext)?
                 // build frame with ciphertext
             }
             FrameType::Terminator => {
                 // Terminator must be empty, so skip AEAD seal
-                ciphertext = Vec::new();
+                Vec::new()
                 // build frame with empty ciphertext
             }
-        }
+        };
 
         let frame_header = FrameHeader {
             frame_type: input.frame_type,
             segment_index: input.segment_index,
             frame_index: input.frame_index,
             plaintext_len: plaintext_len,
-            compressed_len: 0,
             // 4️⃣ Fill mutable fields
             ciphertext_len: ciphertext.len() as u32,
         };
 
-        let record = FrameRecord {
-            header: frame_header,
-            ciphertext: ciphertext,
-        };
-
+        let ct_start = FrameHeader::LEN;
         // 5️⃣ Serialize frame header + ciphertext
-        let wire = encode_frame(&record)?;
+        let wire = encode_frame(&frame_header, &ciphertext)?;
+        let ct_end = wire.len();
 
         Ok(EncryptedFrame {
-            segment_index: input.segment_index,
-            frame_index: input.frame_index,
-            frame_type: input.frame_type,
-            ciphertext: record.ciphertext,
-            wire,
+            segment_index: frame_header.segment_index,
+            frame_index: frame_header.frame_index,
+            frame_type: frame_header.frame_type,
+            wire: Bytes::from(wire),
+            ct_range: ct_start..ct_end,
         })
+        // ✔ ciphertext exists **only once**
+        // ✔ ownership ends at encoding
+        // ✔ single allocation
+        // ✔ ciphertext embedded
+        // ✔ range tracked
     }
 
-    // ## Step 1: Turn `EncryptFrameWorker` into a real worker
-
+    /// ## Step 1: Turn `EncryptFrameWorker` into a real worker
+    /// ### 1. **Frame Workers**: Return Results (No Panics)
+    /// Frame workers should **never panic** - they should always return `Result`:
     pub fn run(
         self,
         rx: Receiver<FrameInput>,
-        tx: Sender<EncryptedFrame>,
+        tx: Sender<Result<EncryptedFrame, FrameWorkerError>>,
     ) {
         std::thread::spawn(move || {
             while let Ok(input) = rx.recv() {
-                match self.encrypt_frame(input) {
-                    Ok(out) => {
-                        if tx.send(out).is_err() {
-                            return;
-                        }
-                    }
-                    Err(_) => return,
+                let result = self.encrypt_frame(&input);
+            
+                // Always send the result (Ok or Err)
+                if tx.send(result).is_err() {
+                    // Segment worker dropped rx, exit cleanly
+                    return;
                 }
+                
+                // When rx is closed, exit gracefully
+                // Continue processing even if encryption failed
+                // (the segment worker will handle the error)
             }
         });
     }

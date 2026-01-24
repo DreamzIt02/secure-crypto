@@ -8,18 +8,26 @@
 
 pub mod framing;
 pub mod frame_worker;
+pub mod segmenting;
 pub mod segment_worker;
-// pub mod io;
-// pub mod pipeline;
+pub mod pipeline;
+pub mod parallelism;
+pub mod io;
 // pub mod core;
+
+pub use parallelism::{
+    ParallelismProfile,
+    HybridParallelismProfile,
+};
+
+pub use io::{
+    InputSource,
+    OutputSink,
+};
 
 // pub use core::{
 //     encrypt_stream_v2,
 //     decrypt_stream_v2,
 // };
 
-// pub use io::{
-//     InputSource,
-//     OutputSink,
-//     ParallelismProfile,
-// };
+

@@ -16,7 +16,8 @@ pub mod encrypt;
 pub mod decrypt;
 
 pub use types::{
-    SegmentInput,
+    EncryptSegmentInput,
+    DecryptSegmentInput,
     EncryptedSegment,
     DecryptedSegment,
     SegmentCryptoContext,

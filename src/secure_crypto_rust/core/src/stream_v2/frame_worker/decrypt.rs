@@ -1,5 +1,7 @@
+// # 📂 `src/stream_v2/frame_worker/decrypt.rs`
+
+use bytes::Bytes;
 use crossbeam::channel::{Receiver, Sender};
-use std::sync::Arc;
 
 use crate::crypto::AadHeader;
 use crate::crypto::{
@@ -8,7 +10,7 @@ use crate::crypto::{
     nonce::derive_nonce_12_tls_style,
 };
 use crate::headers::types::HeaderV1;
-use crate::stream_v2::framing::FrameType;
+use crate::stream_v2::framing::{FrameHeader, FrameType};
 use crate::stream_v2::framing::decode::{decode_frame};
 use super::types::{FrameWorkerError, DecryptedFrame};
 
@@ -22,19 +24,25 @@ impl DecryptFrameWorker {
         let aead = AeadImpl::from_header_and_key(&header, session_key)?;
         Ok(Self { header, aead })
     }
-
     pub fn decrypt_frame(
         &self,
-        wire: &[u8],
+        wire: Bytes,
     ) -> Result<DecryptedFrame, FrameWorkerError> {
-        // parse frame header + ciphertext
-        let record = decode_frame(wire)?;
-        
+        // 1️⃣ Parse header
+        let view = decode_frame(&wire)?;
+
+        let ct_start = FrameHeader::LEN;
+        let ct_end = ct_start + view.header.ciphertext_len as usize;
+
+        if ct_end > wire.len() {
+            return Err(FrameWorkerError::InvalidInput("Wire length mismatch detected".into()));
+        }
+
         let aad_header = AadHeader {
-            frame_type: record.header.frame_type.try_to_u8()?,
-            segment_index: record.header.segment_index,
-            frame_index: record.header.frame_index,
-            plaintext_len: record.header.plaintext_len,
+            frame_type: view.header.frame_type.try_to_u8()?,
+            segment_index: view.header.segment_index,
+            frame_index: view.header.frame_index,
+            plaintext_len: view.header.plaintext_len,
         };
         // rebuild AAD
         let aad = build_aad(&self.header, &aad_header)?;
@@ -42,51 +50,59 @@ impl DecryptFrameWorker {
         // derive nonce
         let nonce = derive_nonce_12_tls_style(
             &self.header.salt,
-            record.header.frame_index as u64,
+            view.header.frame_index as u64,
         )?;
 
-        // AEAD open
-        let plaintext: Vec<u8>;
-        match record.header.frame_type {
+        // 2️⃣ Decrypt: AEAD open
+        let plaintext: Vec<u8> = match view.header.frame_type {
             FrameType::Data | FrameType::Digest => {
                 // Normal AEAD decryption
-                plaintext = self.aead.open(&nonce, &aad, &record.ciphertext)?;
+                self.aead.open(&nonce, &aad, view.ciphertext)?
                 // return FrameOutput with plaintext
             }
             FrameType::Terminator => {
                 // Terminator must be empty, skip AEAD
-                plaintext = Vec::new();
+                Vec::new()
                 // return FrameOutput with empty plaintext
             }
-        }
+        };
 
         Ok(DecryptedFrame {
-            segment_index: record.header.segment_index,
-            frame_index: record.header.frame_index,
-            frame_type: record.header.frame_type,
-            ciphertext: record.ciphertext,
-            plaintext,
+            segment_index: view.header.segment_index,
+            frame_index: view.header.frame_index,
+            frame_type: view.header.frame_type,
+
+            wire, // Bytes cloned, not copied
+            ct_range: ct_start..ct_end,
+
+            plaintext: Bytes::from(plaintext),
         })
+        // 💡 Notice:
+        // * `wire` is **moved into the frame**
+        // * ciphertext is **never copied**
+        // * plaintext **must be owned** (crypto output)
     }
 
-    // ## Step 1: Turn `DecryptFrameWorker` into a real worker
-
+    /// ## Step 1: Turn `DecryptFrameWorker` into a real worker
+    /// ### 1. **Frame Workers**: Return Results (No Panics)
+    /// Frame workers should **never panic** - they should always return `Result`:
     pub fn run(
         self,
-        rx: Receiver<Arc<[u8]>>,
-        tx: Sender<DecryptedFrame>,
+        rx: Receiver<Bytes>,
+        tx: Sender<Result<DecryptedFrame, FrameWorkerError>>,
     ) {
         std::thread::spawn(move || {
+            // We use a reference to the sender 'tx' inside the loop 
+            // to ensure it's only dropped when this thread exits.
             while let Ok(input) = rx.recv() {
-                match self.decrypt_frame(&input) {
-                    Ok(out) => {
-                        if tx.send(out).is_err() {
-                            return;
-                        }
-                    }
-                    Err(_) => return,
+                let result = self.decrypt_frame(input);
+                // Always send result (Ok or Err)
+                if tx.send(result).is_err() {
+                    // Segment worker dropped rx, exit cleanly
+                    return; 
                 }
             }
+            // When rx is closed, exit gracefully
         });
     }
 

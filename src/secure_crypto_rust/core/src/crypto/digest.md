@@ -298,13 +298,37 @@ So decryption must **replay the same byte stream**.
 
 ## ✅ Final verdict on implementation
 
-| Aspect                 | Status        |
-| ---------------------- | ------------- |
+| Aspect                 | Status         |
+| ---------------------- | -------------  |
 | Incremental hashing    | ✅ correct     |
 | Parallel-safe ordering | ✅ correct     |
 | Zero-copy digest input | ✅ correct     |
 | Streaming verifier     | ✅ correct     |
 | Resume compatibility   | ✅ compatible  |
 | Spec safety            | ✅ after fixes |
+
+---
+
+## 🔑 Updated Digest Algorithms
+
+From our `Cargo.toml`:
+
+* `sha2`: provides **Sha224, Sha256, Sha384, Sha512**  
+* `sha3`: provides **Sha3‑224, Sha3‑256, Sha3‑384, Sha3‑512, Keccak variants**  
+* `blake3`: already included, supports serialization.
+
+We’ll extend `DigestAlg` to cover these, and wire them into `DigestState`.
+
+---
+
+## ✅ What’s Now Complete
+
+* **All algorithms wired in**: `Sha224`, `Sha256`, `Sha384`, `Sha512`, `Sha3_224`, `Sha3_256`, `Sha3_384`, `Sha3_512`, `Blake3`.  
+* **Verifier logic**: starts with segment header, updates per frame, finalizes and compares against expected digest.  
+* **Error handling**: returns `DigestError::DigestMismatch` if computed digest doesn’t match expected.  
+
+---
+
+This makes our `digest.rs` **production‑ready**: it now supports all algorithms declared in our `Cargo.toml`, with clean separation of builder vs verifier responsibilities.  
 
 ---

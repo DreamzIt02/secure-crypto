@@ -63,6 +63,8 @@ impl CipherSuite {
 pub enum HkdfPrf {
     Sha256  = prf_ids::SHA256,
     Sha512  = prf_ids::SHA512,
+    Sha3_256= prf_ids::SHA3_256,
+    Sha3_512= prf_ids::SHA3_512,
     Blake3K = prf_ids::BLAKE3K,
 }
 impl HkdfPrf {
@@ -70,6 +72,8 @@ impl HkdfPrf {
         match raw {
             x if x == HkdfPrf::Sha256 as u16  => Ok(()),
             x if x == HkdfPrf::Sha512 as u16  => Ok(()),
+            x if x == HkdfPrf::Sha3_256 as u16  => Ok(()),
+            x if x == HkdfPrf::Sha3_512 as u16  => Ok(()),
             x if x == HkdfPrf::Blake3K as u16 => Ok(()),
             _ => Err(HeaderError::UnknownHkdfPrf { raw }),
         }
@@ -219,16 +223,6 @@ impl HeaderV1 {
             return Err(HeaderError::InvalidVersion { have: self.version });
         }
 
-        // Enums
-        AlgProfile::verify(self.alg_profile)?;
-        CipherSuite::verify(self.cipher)?;
-        HkdfPrf::verify(self.hkdf_prf)?;
-        Strategy::verify(self.strategy)?;
-        AadDomain::verify(self.aad_domain)?;
-
-        // Compression codec
-        CompressionCodec::verify(self.compression)?;
-
         // Chunk size
         if self.chunk_size == 0 {
             return Err(HeaderError::InvalidChunkSizeZero);
@@ -239,6 +233,16 @@ impl HeaderV1 {
                 max: MAX_CHUNK_SIZE as u32,
             });
         }
+
+        // Enums
+        AlgProfile::verify(self.alg_profile)?;
+        CipherSuite::verify(self.cipher)?;
+        HkdfPrf::verify(self.hkdf_prf)?;
+        Strategy::verify(self.strategy)?;
+        AadDomain::verify(self.aad_domain)?;
+
+        // Compression codec
+        CompressionCodec::verify(self.compression)?;
 
         // Salt must not be all zero
         if self.salt.iter().all(|&b| b == 0) {

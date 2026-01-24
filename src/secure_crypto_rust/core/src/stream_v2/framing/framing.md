@@ -30,46 +30,6 @@ framing/
 
 ---
 
-## 📄 `mod.rs`
-
-```rust
-
-```
-
----
-
-## 📄 `types.rs`
-
-```rust
-
-```
-
----
-
-## 📄 `encode.rs`
-
-````rust
-
-````
-
----
-
-## 📄 `decode.rs`
-
-```rust
-
-```
-
----
-
-## 📄 `tests.rs`
-
-```rust
-
-```
-
----
-
 ## ✅ GUARANTEES (Hard)
 
 ✔ Canonical wire format

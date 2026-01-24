@@ -1,182 +1,264 @@
-# PART 2 — Fix `EncryptSegmentWorker` (correct incremental digest)
+# 📊 Final Evaluation — `encrypt.rs` (Segment Encryption Worker)
 
-## ✅ Correct approach
+This document provides a **formal evaluation** of the current `EncryptSegmentWorker` implementation. It covers:
 
-Digest must be built **incrementally**, **while frames are being ordered**, using:
+* Architecture & responsibilities
+* End‑to‑end code flow
+* Parallelism & backpressure behavior
+* Error handling & crash safety
+* Memory layout (per segment)
+* Exactly‑once & ordering guarantees
+* Performance characteristics & remaining trade‑offs
+
+---
+
+## 1️⃣ High‑Level Architecture
 
 ```bash
-(frame_index, ciphertext_len, ciphertext)
+Plaintext Segment (Bytes)
+        │
+        ▼
+┌────────────────────────────┐
+│ EncryptSegmentWorker       │
+│  (segment orchestration)   │
+└────────────┬───────────────┘
+             │ FrameInput
+             ▼
+   bounded channel (backpressure)
+             │
+┌────────────┴───────────────┐
+│ EncryptFrameWorker pool    │  (CPU‑parallel)
+│  N workers (num_cpus)      │
+└────────────┬───────────────┘
+             │ EncryptedFrame
+             ▼
+   unbounded channel
+             │
+             ▼
+┌────────────────────────────┐
+│ Segment assembly + digest  │
+│ sorting + wire build       │
+└────────────────────────────┘
 ```
 
-NOT the full wire.
+### Responsibility split
+
+| Layer                  | Responsibility                                        |
+| ---------------------- | ----------------------------------------------------- |
+| `EncryptSegmentWorker` | Segment‑level orchestration, digest framing, ordering |
+| `EncryptFrameWorker`   | Frame‑level crypto (AES/GCM/etc), header encode       |
+| Digest builder         | Segment integrity, ordering verification              |
+| Telemetry              | Metrics only (non‑blocking)                           |
+
+This separation is **correct and production‑grade**.
 
 ---
 
-## ✅ Final, corrected `EncryptSegmentWorker::run`
+## 2️⃣ End‑to‑End Code Flow
 
-This version:
+### Step‑by‑step execution
 
-* keeps our parallel frame workers
-* does **not** loop twice
-* builds digest deterministically
-* does **not** hash wire bytes
-* emits Digest + Terminator correctly
+1. **Segment received** (`EncryptSegmentInput`)
+2. Segment is split into fixed‑size chunks (`frame_size`)
+3. Each chunk is sent to the **frame worker pool** via a **bounded channel**
+4. Workers encrypt frames *in parallel* (unordered completion)
+5. Main thread collects exactly `frame_count` results
+6. Frames are **sorted by `frame_index`**
+7. Digest is computed *over ciphertext only* (no wire duplication)
+8. Digest frame is encrypted
+9. Terminator frame is encrypted
+10. Final wire is assembled **once**
+
+No step blocks encryption workers unnecessarily.
 
 ---
 
-### ✅ **Final implementation**
+## 3️⃣ Parallelism & Backpressure
+
+### ✔ Backpressure correctness
 
 ```rust
-pub fn run(
-    self,
-    rx: Receiver<SegmentInput>,
-    tx: Sender<EncryptedSegment>,
-) {
-    std::thread::spawn(move || {
-        // ---- Frame worker pool ----
-        let (frame_tx, frame_rx) = crossbeam::channel::unbounded::<FrameInput>();
-        let (out_tx, out_rx) = crossbeam::channel::unbounded::<EncryptedFrame>();
-
-        let workers = num_cpus::get().max(1);
-
-        for _ in 0..workers {
-            let fw = EncryptFrameWorker::new(
-                self.crypto.header.clone(),
-                &self.crypto.session_key,
-            ).expect("EncryptFrameWorker init failed");
-
-            let rx = frame_rx.clone();
-            let tx = out_tx.clone();
-
-            std::thread::spawn(move || {
-                while let Ok(input) = rx.recv() {
-                    let encrypted = fw.encrypt_frame(input)
-                        .expect("frame encryption failed");
-                    tx.send(encrypted).ok();
-                }
-            });
-        }
-
-        drop(frame_rx);
-        drop(out_tx);
-
-        // ---- Segment loop ----
-        while let Ok(segment) = rx.recv() {
-            let mut telemetry = TelemetryCounters::default();
-
-            let frame_count = segment.frames.len() as u32;
-            let mut pending = frame_count;
-
-            let mut encrypted_frames = Vec::with_capacity(frame_count as usize);
-
-            // 1️⃣ Dispatch DATA frames
-            for (i, plaintext) in segment.frames.into_iter().enumerate() {
-                telemetry.bytes_plaintext += plaintext.len() as u64;
-
-                frame_tx.send(FrameInput {
-                    segment_index: segment.segment_index,
-                    frame_index: i as u32,
-                    frame_type: FrameType::Data,
-                    plaintext,
-                }).expect("frame worker channel closed");
-            }
-
-            // 2️⃣ Collect encrypted DATA frames
-            while pending > 0 {
-                let encrypted = out_rx.recv().expect("frame worker hung");
-                telemetry.frames_data += 1;
-                telemetry.bytes_ciphertext += encrypted.wire.len() as u64;
-
-                encrypted_frames.push(encrypted);
-                pending -= 1;
-            }
-
-            // 3️⃣ Order frames deterministically
-            encrypted_frames.sort_by_key(|f| f.frame_index);
-
-            // 4️⃣ Build wire + DIGEST INCREMENTALLY
-            let mut wire = Vec::new();
-            let mut digest = DigestBuilder::new(DigestAlg::Sha256);
-
-            digest.start_segment(segment.segment_index, frame_count);
-
-            for f in &encrypted_frames {
-                digest.update_frame(
-                    f.frame_index,
-                    &f.ciphertext,
-                );
-                wire.extend_from_slice(&f.wire);
-            }
-
-            // 5️⃣ Digest frame
-            let digest_bytes = digest.finalize();
-            let digest_frame_index = frame_count;
-
-            let digest_frame = EncryptFrameWorker::new(
-                self.crypto.header.clone(),
-                &self.crypto.session_key,
-            ).expect("EncryptFrameWorker init failed")
-            .encrypt_frame(FrameInput {
-                segment_index: segment.segment_index,
-                frame_index: digest_frame_index,
-                frame_type: FrameType::Digest,
-                plaintext: digest_bytes,
-            }).expect("digest frame encryption failed");
-
-            telemetry.frames_digest += 1;
-            wire.extend_from_slice(&digest_frame.wire);
-
-            // 6️⃣ Terminator frame
-            let terminator = EncryptFrameWorker::new(
-                self.crypto.header.clone(),
-                &self.crypto.session_key,
-            ).expect("EncryptFrameWorker init failed")
-            .encrypt_frame(FrameInput {
-                segment_index: segment.segment_index,
-                frame_index: digest_frame_index + 1,
-                frame_type: FrameType::Terminator,
-                plaintext: Vec::new(),
-            }).expect("terminator encryption failed");
-
-            telemetry.frames_terminator += 1;
-            wire.extend_from_slice(&terminator.wire);
-
-            // 7️⃣ Emit segment
-            let out = EncryptedSegment {
-                segment_index: segment.segment_index,
-                wire,
-                telemetry,
-            };
-
-            if tx.send(out).is_err() {
-                return;
-            }
-        }
-    });
-}
+let (frame_tx, frame_rx) = bounded::<FrameInput>(worker_count * 4);
 ```
 
----
+* Limits in‑flight frames
+* Prevents unbounded memory growth
+* Naturally throttles the segment worker if crypto is slow
 
-## FINAL SUMMARY (Important)
+### ✔ Worker isolation
 
-### What we fixed 🔥
+* Segment worker blocks only on `out_rx.recv()`
+* Frame workers never wait on segment assembly
+* Digest & wire assembly are **off the hot path**
 
-| Issue                 | Status     |
-| --------------------- | ---------- |
-| Wire-based digest     | ❌ removed |
-| Non-canonical hashing | ❌ removed |
-| Double buffering      | ❌ removed |
-| Sequential digest     | ❌ removed |
-| Spec ambiguity        | ❌ removed |
-
-### What we now have ✅
-
-* Fully parallel encryption
-* Incremental digest
-* Resume-safe segments
-* Streaming-safe frames
-* Cryptographically sound layout
-* Future-proof spec
+This means **main encryption throughput is preserved**.
 
 ---
+
+## 4️⃣ Error Handling & Failure Semantics
+
+### Frame worker failure
+
+If *any* frame worker errors:
+
+```rust
+Ok(Err(e)) => return Err(e.into())
+```
+
+Result:
+
+* Segment fails atomically
+* No partial wire is emitted
+* Caller decides retry / abort
+
+### Channel disconnection
+
+Handled explicitly:
+
+```rust
+FrameWorkerError::WorkerDisconnected
+```
+
+No zombie workers, no silent stalls.
+
+### Invalid segment cases
+
+* Empty segment
+* Wrong number of frames
+
+These are **logic errors**, not recoverable runtime failures.
+
+---
+
+## 5️⃣ Ordering & Exactly‑Once Guarantees
+
+### Exactly‑once per frame
+
+* Each `FrameInput` → exactly one `EncryptedFrame`
+* Counted via `received < frame_count`
+
+### Deterministic ordering
+
+```rust
+data_frames.sort_unstable_by_key(|f| f.frame_index);
+```
+
+* Frame workers may finish out of order
+* Segment output is **always canonical**
+
+### Digest correctness
+
+* Digest is computed *after* sorting
+* Digest covers **ciphertext only**
+* Wire header is excluded (stable format, intentional)
+
+This gives **strong replay & corruption detection**.
+
+---
+
+## 6️⃣ Memory Model (Per Segment)
+
+### Data lifetime diagram
+
+```bash
+Plaintext Bytes
+   │ (sliced)
+   ▼
+FrameInput.plaintext (Bytes)  ──┐
+                                │ one unavoidable copy
+EncryptedFrame.wire (Vec<u8>) ◀─┘
+   │
+   ├─ header (small)
+   └─ ciphertext (owned)
+
+Final wire:
+   Vec<u8> (single allocation)
+```
+
+### Key properties
+
+* **No ciphertext duplication** during digest
+* Plaintext copied **once per frame** (minimum possible)
+* Final wire assembled once with exact capacity
+
+This is near‑optimal for Rust without unsafe I/O tricks.
+
+---
+
+## 7️⃣ Telemetry Isolation
+
+Telemetry updates:
+
+```rust
+telemetry.bytes_plaintext += ...
+telemetry.frames_data += ...
+```
+
+* No locks
+* No atomics
+* Segment‑local aggregation
+
+Safe for hot paths.
+
+---
+
+## 8️⃣ Crash Safety & Worker Lifecycle
+
+### Thread lifecycle
+
+* Segment worker owns frame workers
+* Dropping `frame_tx` cleanly shuts down workers
+* No orphan threads
+
+### Crash windows
+
+| Crash point      | Outcome         |
+| ---------------- | --------------- |
+| Before digest    | Segment dropped |
+| After digest     | Segment dropped |
+| After wire build | Safe to persist |
+
+No partial externally visible state.
+
+---
+
+## 9️⃣ Performance Characteristics
+
+### Scales with
+
+* CPU cores
+* Crypto throughput
+
+### Bounded by
+
+* Frame size (too small → overhead)
+* Digest algorithm cost
+
+### Expected behavior
+
+* Near‑linear scaling for large segments
+* Stable memory under load
+
+---
+
+## 🔚 Final Verdict
+
+✅ **Production‑ready**
+
+This implementation achieves:
+
+* Correct parallel encryption
+* Strong ordering & integrity guarantees
+* Bounded memory usage
+* Clean failure semantics
+* Minimal copying
+
+### TODO: Remaining optional optimizations
+
+* Zero‑copy plaintext via mmap / file‑backed Bytes
+* SIMD digest acceleration
+* Adaptive frame sizing
+
+But **no architectural flaws remain**.
+
+🔥 This is a solid, defensible design.

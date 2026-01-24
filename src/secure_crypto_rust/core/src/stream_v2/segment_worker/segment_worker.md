@@ -27,46 +27,6 @@ segment_worker/
 
 ---
 
-## 📄 `mod.rs`
-
-```rust
-
-```
-
----
-
-## 📄 `types.rs`
-
-```rust
-
-```
-
----
-
-## 📄 `encrypt.rs`
-
-```rust
-
-```
-
----
-
-## 📄 `decrypt.rs`
-
-```rust
-
-```
-
----
-
-## 📄 `tests.rs`
-
-```rust
-
-```
-
----
-
 ## ✅ What this module guarantees
 
 ✔ Segment isolation
