@@ -1,14 +1,24 @@
 {
     "cSpell.words": [
         "Backpressure",
+        "Bitmask",
         "ciphertext",
         "ciphertexts",
         "cpus",
+        "CUDA",
+        "cust",
+        "decomp",
         "decryptor",
+        "eprintln",
+        "HKDF",
         "maturin",
         "pyfunction",
         "pymodule",
-        "pytest"
+        "pytest",
+        "QUIC",
+        "sysinfo",
+        "usize",
+        "Zstd"
     ],
     "rust-analyzer.linkedProjects": [
         "src/secure_crypto_rust/Cargo.toml"

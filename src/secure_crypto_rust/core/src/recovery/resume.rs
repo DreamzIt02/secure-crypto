@@ -10,7 +10,7 @@ use std::io;
 #[derive(Debug, Clone)]
 pub struct SegmentResumePoint {
     /// The segment currently being processed.
-    pub segment_index: u64,
+    pub segment_index: u32,
     /// First frame index that has NOT yet been authenticated/processed.
     pub next_frame_index: u32,
     /// The digest state captured at the end of the last successful frame.
@@ -19,7 +19,7 @@ pub struct SegmentResumePoint {
 
 impl SegmentResumePoint {
     /// Create a new resume point.
-    pub fn new(segment_index: u64, next_frame_index: u32, checkpoint: SegmentCheckpoint) -> Self {
+    pub fn new(segment_index: u32, next_frame_index: u32, checkpoint: SegmentCheckpoint) -> Self {
         Self {
             segment_index,
             next_frame_index,
@@ -83,7 +83,7 @@ impl SegmentResumePoint {
 }
 
 /// Helper to extract a ResumePoint from a log line during bootstrap.
-pub fn parse_resume_line(line: &str) -> Option<(u64, u32, String)> {
+pub fn parse_resume_line(line: &str) -> Option<(u32, u32, String)> {
     let content = line.strip_prefix("SCHEDULER: ")?;
     let mut parts: Vec<&str> = content.split('|').collect();
     

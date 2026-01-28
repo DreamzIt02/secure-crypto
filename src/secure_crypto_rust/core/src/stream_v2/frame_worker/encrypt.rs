@@ -1,5 +1,7 @@
 // # 📂 `src/stream_v2/frame_worker/encrypt.rs`
 
+use std::time::Instant;
+
 use bytes::Bytes;
 use crossbeam::channel::{Receiver, Sender};
 use crate::crypto::types::AadHeader;
@@ -11,6 +13,7 @@ use crate::crypto::{
 use crate::headers::types::{HeaderV1};
 use crate::stream_v2::framing::{FrameHeader, FrameType};
 use crate::stream_v2::framing::encode::encode_frame;
+use crate::telemetry::{Stage, StageTimes};
 use super::types::{FrameInput, FrameWorkerError, EncryptedFrame};
 
 pub struct EncryptFrameWorker {
@@ -28,7 +31,10 @@ impl EncryptFrameWorker {
         &self,
         input: &FrameInput,
     ) -> Result<EncryptedFrame, FrameWorkerError> {
-        // validate input
+        let mut stage_times = StageTimes::default();
+        
+        // Validation
+        let start = Instant::now();
         input.validate()?;
 
         let plaintext_len = input.plaintext.len() as u32;
@@ -47,8 +53,11 @@ impl EncryptFrameWorker {
             &self.header.salt,
             input.frame_index as u64,
         )?;
+        stage_times.add(Stage::Validate, start.elapsed());
 
         // 3️⃣ Encrypt
+        // Encryption
+        let start = Instant::now();
         let ciphertext: Vec<u8> = match input.frame_type {
             FrameType::Data | FrameType::Digest => {
                 // normal encryption path
@@ -61,6 +70,7 @@ impl EncryptFrameWorker {
                 // build frame with empty ciphertext
             }
         };
+        stage_times.add(Stage::Encrypt, start.elapsed());
 
         let frame_header = FrameHeader {
             frame_type: input.frame_type,
@@ -71,10 +81,13 @@ impl EncryptFrameWorker {
             ciphertext_len: ciphertext.len() as u32,
         };
 
+        // Encoding
+        let start = Instant::now();
         let ct_start = FrameHeader::LEN;
         // 5️⃣ Serialize frame header + ciphertext
         let wire = encode_frame(&frame_header, &ciphertext)?;
         let ct_end = wire.len();
+        stage_times.add(Stage::Encode, start.elapsed());
 
         Ok(EncryptedFrame {
             segment_index: frame_header.segment_index,
@@ -82,6 +95,7 @@ impl EncryptFrameWorker {
             frame_type: frame_header.frame_type,
             wire: Bytes::from(wire),
             ct_range: ct_start..ct_end,
+            stage_times: stage_times,
         })
         // ✔ ciphertext exists **only once**
         // ✔ ownership ends at encoding

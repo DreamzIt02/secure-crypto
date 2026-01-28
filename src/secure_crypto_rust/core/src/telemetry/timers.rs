@@ -25,6 +25,7 @@ pub enum Stage {
     Encrypt,
     Decrypt,
     Validate,
+    Digest,
 }
 
 impl fmt::Display for Stage {
@@ -39,6 +40,7 @@ impl fmt::Display for Stage {
             Stage::Encrypt    => "encrypt",
             Stage::Decrypt    => "decrypt",
             Stage::Validate   => "validate",
+            Stage::Digest     => "digest",
         };
         f.write_str(name)
     }
@@ -60,7 +62,7 @@ impl fmt::Display for Stage {
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct StageTimes {
-    times: HashMap<Stage, Duration>,
+    pub times: HashMap<Stage, Duration>,
 }
 // ### 🚀 Summary
 // - Add `#[derive(Serialize, Deserialize)]` to `Stage`.
@@ -69,9 +71,13 @@ pub struct StageTimes {
 
 impl StageTimes {
     /// Add duration to a stage (accumulates if already present).
+    // pub fn add(&mut self, stage: Stage, dur: Duration) {
+    //     *self.times.entry(stage).or_insert(Duration::ZERO) += dur;
+    // }
     pub fn add(&mut self, stage: Stage, dur: Duration) {
-        *self.times.entry(stage).or_insert(Duration::ZERO) += dur;
+        self.times.insert(stage, dur);
     }
+
 
     /// Get total duration for a stage.
     pub fn get(&self, stage: Stage) -> Duration {
@@ -134,6 +140,38 @@ impl StageTimes {
 
     pub fn iter(&self) -> impl Iterator<Item = (&Stage, &Duration)> {
         self.times.iter()
+    }
+
+    /// Merge another StageTimes into this one
+    pub fn merge(&mut self, other: &StageTimes) {
+        for (stage, dur) in &other.times {
+            *self.times.entry(*stage).or_insert(Duration::ZERO) += *dur;
+        }
+    }
+
+    pub fn summary(&self) -> String {
+        let mut out = String::new();
+        out.push_str("=== Stage Times Summary ===\n");
+        for (stage, dur) in &self.times {
+            out.push_str(&format!("{:?}: {:?}\n", stage, dur));
+        }
+        out
+    }
+
+    // println!("{}", st.summary());
+    // // or, with Display:
+    // println!("{}", st);
+
+}
+
+// Optional: implement Display so we can just `println!("{}", stage_times)`
+impl fmt::Display for StageTimes {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        writeln!(f, "=== Stage Times Summary ===")?;
+        for (stage, dur) in &self.times {
+            writeln!(f, "{:?}: {:?}", stage, dur)?;
+        }
+        Ok(())
     }
 }
 
@@ -214,6 +252,12 @@ impl TelemetryTimer {
             None => Instant::now().duration_since(self.start_time),
         }
     }
+
+    /// Merge another StageTimes into the global timer
+    pub fn merge(&mut self, other: &StageTimes) {
+        self.stage_times.merge(other);
+    }
+
 }
 
 // Usage becomes type‑safe:

@@ -7,7 +7,6 @@
 // ```
 // src/compression/
 //  ├── mod.rs
-//  ├── constants.rs
 //  ├── registry.rs
 //  ├── codecs/
 //  │    ├── auto.rs
@@ -30,13 +29,11 @@
 //! - Dictionaries must be explicitly declared and bound via header.dict_id.
 //! - Registry resolves codec IDs to implementations.
 
-pub mod constants;
 pub mod types;
 pub mod registry;
 pub mod codecs;
 pub mod stream;
 
-pub use constants::*;
 pub use types::*;
 pub use registry::*;
 

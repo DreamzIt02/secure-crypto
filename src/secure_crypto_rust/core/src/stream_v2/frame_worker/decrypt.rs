@@ -1,5 +1,7 @@
 // # 📂 `src/stream_v2/frame_worker/decrypt.rs`
 
+use std::time::Instant;
+
 use bytes::Bytes;
 use crossbeam::channel::{Receiver, Sender};
 
@@ -12,6 +14,7 @@ use crate::crypto::{
 use crate::headers::types::HeaderV1;
 use crate::stream_v2::framing::{FrameHeader, FrameType};
 use crate::stream_v2::framing::decode::{decode_frame};
+use crate::telemetry::{Stage, StageTimes};
 use super::types::{FrameWorkerError, DecryptedFrame};
 
 pub struct DecryptFrameWorker {
@@ -28,9 +31,16 @@ impl DecryptFrameWorker {
         &self,
         wire: Bytes,
     ) -> Result<DecryptedFrame, FrameWorkerError> {
+        let mut stage_times = StageTimes::default();
+        
         // 1️⃣ Parse header
+        let start = Instant::now();
         let view = decode_frame(&wire)?;
+        // Decoding
+        stage_times.add(Stage::Decode, start.elapsed());
 
+        // Validation
+        let start = Instant::now();
         let ct_start = FrameHeader::LEN;
         let ct_end = ct_start + view.header.ciphertext_len as usize;
 
@@ -52,8 +62,11 @@ impl DecryptFrameWorker {
             &self.header.salt,
             view.header.frame_index as u64,
         )?;
+        stage_times.add(Stage::Validate, start.elapsed());
 
         // 2️⃣ Decrypt: AEAD open
+        // Decryption
+        let start = Instant::now();
         let plaintext: Vec<u8> = match view.header.frame_type {
             FrameType::Data | FrameType::Digest => {
                 // Normal AEAD decryption
@@ -66,6 +79,7 @@ impl DecryptFrameWorker {
                 // return FrameOutput with empty plaintext
             }
         };
+        stage_times.add(Stage::Decrypt, start.elapsed());
 
         Ok(DecryptedFrame {
             segment_index: view.header.segment_index,
@@ -76,6 +90,7 @@ impl DecryptFrameWorker {
             ct_range: ct_start..ct_end,
 
             plaintext: Bytes::from(plaintext),
+            stage_times,
         })
         // 💡 Notice:
         // * `wire` is **moved into the frame**

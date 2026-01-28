@@ -110,3 +110,37 @@ pub struct TelemetrySnapshot {
   - Large file tests: verify throughput and ratios remain stable.
 
 ---
+
+### 🧩 Telemetry Module Recap
+
+**1. `TelemetryCounters` (counters.rs)**
+
+- Tracks deterministic counts: frames, bytes (plaintext, compressed, ciphertext, overhead).
+- Provides helpers:
+  - `add_header`, `add_encrypt_data`, `add_decrypt_data`, `add_terminator`, `add_digest`.
+  - `merge` and `AddAssign` for combining counters across workers.
+- Purpose: lightweight, lock‑free accumulation of per‑segment stats.
+
+**2. `TelemetryTimer` + `StageTimes` (timers.rs)**
+
+- Records elapsed time and per‑stage durations (`Read`, `Write`, `Compress`, `Encrypt`, etc.).
+- `StageTimes` is a `HashMap<Stage, Duration>` with helpers to add, query, and sum.
+- Purpose: measure performance and stage breakdown.
+
+**3. `TelemetrySnapshot` (snapshot.rs)**
+
+- Aggregates counters + timer into a serializable struct.
+- Computes derived metrics: compression ratio, throughput, elapsed.
+- Provides helpers:
+  - `sanity_check`, `has_all_stages`, `attach_output`.
+- Purpose: stable ABI snapshot for reporting telemetry externally.
+
+---
+
+### 🔧 Integration Implication
+
+- **Segment workers** (`encrypt.rs`, `decrypt.rs`) already produce per‑segment telemetry objects.
+- **Pipeline** (`pipeline.rs`) should merge those per‑segment counters into a global `TelemetryCounters` and accumulate stage times into `TelemetryTimer`.
+- **Core API** (`core.rs`) doesn’t need to manage telemetry directly — it just returns the `TelemetrySnapshot` produced by the pipeline.
+
+---

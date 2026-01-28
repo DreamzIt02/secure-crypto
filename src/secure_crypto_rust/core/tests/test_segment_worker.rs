@@ -9,28 +9,45 @@ use bytes::Bytes;
 use crossbeam::channel::{Receiver, Sender, unbounded};
 use crypto_core::crypto::{DigestAlg, KEY_LEN_32};
 use crypto_core::headers::HeaderV1;
+use crypto_core::stream_v2::parallelism::HybridParallelismProfile;
 use crypto_core::stream_v2::segment_worker::{
-    DecryptSegmentInput, DecryptSegmentWorker, EncryptSegmentInput, EncryptSegmentWorker, EncryptedSegment, SegmentCryptoContext, SegmentWorkerError
+    DecryptSegmentInput, DecryptSegmentWorker, EncryptSegmentInput, EncryptSegmentWorker, EncryptedSegment, EncryptContext, DecryptContext, SegmentWorkerError
 };
 use crypto_core::recovery::persist::AsyncLogManager;
 use crypto_core::stream_v2::segmenting::types::SegmentFlags;
+use crypto_core::telemetry::StageTimes;
 
-    fn setup_test_context(alg: DigestAlg) -> (SegmentCryptoContext, Arc<AsyncLogManager>) {
-        let worker_count = num_cpus::get().max(1);
+    fn setup_enc_context(alg: DigestAlg) -> (EncryptContext, Arc<AsyncLogManager>) {
         let header = HeaderV1::test_header(); // Mock header
+        let profile = HybridParallelismProfile::dynamic(header.chunk_size as u32, 0.50, 64);
        // Create a Vec of 32 bytes
         let session_key = vec![0x42u8; KEY_LEN_32];
         let log_manager = Arc::new(AsyncLogManager::new("test_audit.log", 100).unwrap());
         
-        let context = SegmentCryptoContext::new(
+        let context = EncryptContext::new(
             header,
+            profile,
             &session_key,
             alg,
-            worker_count,
         ).unwrap();
         (context, log_manager)
     }
 
+    fn setup_dec_context(alg: DigestAlg) -> (DecryptContext, Arc<AsyncLogManager>) {
+        let header = HeaderV1::test_header(); // Mock header
+        let profile = HybridParallelismProfile::dynamic(header.chunk_size as u32, 0.50, 64);
+       // Create a Vec of 32 bytes
+        let session_key = vec![0x42u8; KEY_LEN_32];
+        let log_manager = Arc::new(AsyncLogManager::new("test_audit.log", 100).unwrap());
+        
+        let context = DecryptContext::from_stream_header(
+            header,
+            profile,
+            &session_key,
+            alg,
+        ).unwrap();
+        (context, log_manager)
+    }
     // Bridge function: forward encrypted segments into decrypt input
     fn forward_encrypted_to_decrypt(
         enc_rx: Receiver<Result<EncryptedSegment, SegmentWorkerError>>,
@@ -59,10 +76,11 @@ use crypto_core::stream_v2::segmenting::types::SegmentFlags;
 
     #[test]
     fn encrypt_decrypt_segment_roundtrip() {
-        let (crypto, log) = setup_test_context(DigestAlg::Sha256);
+        let (crypto_enc, log_enc) = setup_enc_context(DigestAlg::Sha256);
+        let (crypto_dec, log_dec) = setup_dec_context(DigestAlg::Sha256);
 
-        let enc = EncryptSegmentWorker::new(crypto.clone(), log.clone());
-        let dec = DecryptSegmentWorker::new(crypto, log);
+        let enc = EncryptSegmentWorker::new(crypto_enc, log_enc);
+        let dec = DecryptSegmentWorker::new(crypto_dec, log_dec);
 
         let (enc_tx, enc_rx) = unbounded();
         let (mid_tx, mid_rx) = unbounded();
@@ -79,13 +97,13 @@ use crypto_core::stream_v2::segmenting::types::SegmentFlags;
 
         enc_tx.send(EncryptSegmentInput {
             segment_index: 7,
-            plaintext: plaintext.clone(),
-            compressed_len: 0,
+            bytes: plaintext.clone(),
             flags: SegmentFlags::empty(),
+            stage_times: StageTimes::default(),
         }).unwrap();
 
         let encrypted = dec_rx.recv().unwrap().unwrap();
-        let reassembled = encrypted.frames.concat();
+        let reassembled = encrypted.bytes;
 
         assert_eq!(reassembled, plaintext);
         assert_eq!(encrypted.header.segment_index, 7);
@@ -95,10 +113,11 @@ use crypto_core::stream_v2::segmenting::types::SegmentFlags;
 
     #[test]
     fn large_segment_parallel_encryption() {
-        let (crypto, log) = setup_test_context(DigestAlg::Sha256);
+        let (crypto_enc, log_enc) = setup_enc_context(DigestAlg::Sha256);
+        let (crypto_dec, log_dec) = setup_dec_context(DigestAlg::Sha256);
 
-        let enc = EncryptSegmentWorker::new(crypto.clone(), log.clone());
-        let dec = DecryptSegmentWorker::new(crypto, log);
+        let enc = EncryptSegmentWorker::new(crypto_enc, log_enc);
+        let dec = DecryptSegmentWorker::new(crypto_dec, log_dec);
 
         let (enc_tx, enc_rx) = unbounded();
         let (mid_tx, mid_rx) = unbounded();
@@ -116,13 +135,13 @@ use crypto_core::stream_v2::segmenting::types::SegmentFlags;
 
         enc_tx.send(EncryptSegmentInput {
             segment_index: 0,
-            plaintext,
-            compressed_len: 0,
+            bytes: plaintext,
             flags: SegmentFlags::empty(),
+            stage_times: StageTimes::default(),
         }).unwrap();
 
         let decrypted = dec_rx.recv().unwrap().unwrap();
-        let out = decrypted.frames.concat();
+        let out = decrypted.bytes;
 
         assert_eq!(out, data);
     }
@@ -131,10 +150,11 @@ use crypto_core::stream_v2::segmenting::types::SegmentFlags;
 
     #[test]
     fn corrupted_segment_fails_digest_verification() {
-        let (crypto, log) = setup_test_context(DigestAlg::Sha256);
+        let (crypto_enc, log_enc) = setup_enc_context(DigestAlg::Sha256);
+        let (crypto_dec, log_dec) = setup_dec_context(DigestAlg::Sha256);
 
-        let enc = EncryptSegmentWorker::new(crypto.clone(), log.clone());
-        let dec = DecryptSegmentWorker::new(crypto, log);
+        let enc = EncryptSegmentWorker::new(crypto_enc, log_enc);
+        let dec = DecryptSegmentWorker::new(crypto_dec, log_dec);
 
         let (enc_tx, enc_rx) = unbounded();
         let (mid_tx, mid_rx) = unbounded();
@@ -148,9 +168,9 @@ use crypto_core::stream_v2::segmenting::types::SegmentFlags;
         enc_tx
             .send(EncryptSegmentInput {
                 segment_index: 1,
-                plaintext: Bytes::from_static(b"tamper me"),
-                compressed_len: 0,
+                bytes: Bytes::from_static(b"tamper me"),
                 flags: SegmentFlags::empty(),
+                stage_times: StageTimes::default(),
             })
             .unwrap();
 
@@ -177,16 +197,18 @@ use crypto_core::stream_v2::segmenting::types::SegmentFlags;
 
     #[test]
     fn wrong_key_fails_segment_decryption() {
-        let (crypto, log) = setup_test_context(DigestAlg::Sha256);
+        let (crypto_enc, log_enc) = setup_enc_context(DigestAlg::Sha256);
+        let (crypto_dec, log_dec) = setup_dec_context(DigestAlg::Sha256);
 
-        let enc = EncryptSegmentWorker::new(crypto.clone(), log.clone());
+        let enc = EncryptSegmentWorker::new(crypto_enc, log_enc);
+        // let dec = DecryptSegmentWorker::new(crypto_dec.clone(), log_dec.clone());
 
-        let mut wrong_crypto = crypto.clone();
-        wrong_crypto.session_key[0] ^= 0xFF;
+        let mut wrong_crypto = crypto_dec.clone();
+        wrong_crypto.base.session_key[0] ^= 0xFF;
 
         let dec = DecryptSegmentWorker::new(
             wrong_crypto,
-            log,
+            log_dec,
         );
 
         let (enc_tx, enc_rx) = unbounded();
@@ -202,9 +224,9 @@ use crypto_core::stream_v2::segmenting::types::SegmentFlags;
 
         enc_tx.send(EncryptSegmentInput {
             segment_index: 3,
-            plaintext: Bytes::from_static(b"secret"),
-            compressed_len: 0,
+            bytes: Bytes::from_static(b"secret"),
             flags: SegmentFlags::empty(),
+            stage_times: StageTimes::default(),
         }).unwrap();
 
         assert!(dec_rx.recv().unwrap().is_err());
@@ -214,10 +236,11 @@ use crypto_core::stream_v2::segmenting::types::SegmentFlags;
 
     #[test]
     fn truncated_segment_fails() {
-        let (crypto, log) = setup_test_context(DigestAlg::Sha256);
+        let (crypto_enc, log_enc) = setup_enc_context(DigestAlg::Sha256);
+        let (crypto_dec, log_dec) = setup_dec_context(DigestAlg::Sha256);
 
-        let enc = EncryptSegmentWorker::new(crypto.clone(), log.clone());
-        let dec = DecryptSegmentWorker::new(crypto, log);
+        let enc = EncryptSegmentWorker::new(crypto_enc, log_enc);
+        let dec = DecryptSegmentWorker::new(crypto_dec, log_dec);
 
         let (enc_tx, enc_rx) = unbounded();
         let (mid_tx, mid_rx) = unbounded();
@@ -230,9 +253,9 @@ use crypto_core::stream_v2::segmenting::types::SegmentFlags;
         // produce a segment
         enc_tx.send(EncryptSegmentInput {
             segment_index: 4,
-            plaintext: Bytes::from_static(b"cut me"),
-            compressed_len: 0,
+            bytes: Bytes::from_static(b"cut me"),
             flags: SegmentFlags::empty(),
+            stage_times: StageTimes::default(),
         }).unwrap();
 
         // later, use the original or another clone for manual send
@@ -254,10 +277,11 @@ use crypto_core::stream_v2::segmenting::types::SegmentFlags;
 
     #[test]
     fn missing_terminator_frame_is_rejected() {
-        let (crypto, log) = setup_test_context(DigestAlg::Sha256);
+        let (crypto_enc, log_enc) = setup_enc_context(DigestAlg::Sha256);
+        let (crypto_dec, log_dec) = setup_dec_context(DigestAlg::Sha256);
 
-        let enc = EncryptSegmentWorker::new(crypto.clone(), log.clone());
-        let dec = DecryptSegmentWorker::new(crypto, log);
+        let enc = EncryptSegmentWorker::new(crypto_enc, log_enc);
+        let dec = DecryptSegmentWorker::new(crypto_dec, log_dec);
 
         let (enc_tx, enc_rx) = unbounded();
         let (mid_tx, mid_rx) = unbounded();
@@ -270,9 +294,9 @@ use crypto_core::stream_v2::segmenting::types::SegmentFlags;
         // produce a segment
         enc_tx.send(EncryptSegmentInput {
             segment_index: 5,
-            plaintext: Bytes::from_static(b"no terminator"),
-            compressed_len: 0,
+            bytes: Bytes::from_static(b"no terminator"),
             flags: SegmentFlags::empty(),
+            stage_times: StageTimes::default(),
         }).unwrap();
 
         // later, use the original or another clone for manual send
@@ -284,7 +308,8 @@ use crypto_core::stream_v2::segmenting::types::SegmentFlags;
         mid_tx.send(Ok(EncryptedSegment {
             header: encrypted.header,
             wire: truncated,
-            telemetry: encrypted.telemetry,
+            counters: encrypted.counters,
+            stage_times: encrypted.stage_times,
         })).unwrap();
 
         // bridge converts EncryptedSegment → DecryptSegmentInput
@@ -299,8 +324,11 @@ use crypto_core::stream_v2::segmenting::types::SegmentFlags;
 
     #[test]
     fn segment_encryption_is_deterministic() {
-        let (crypto, log) = setup_test_context(DigestAlg::Sha256);
-        let enc = EncryptSegmentWorker::new(crypto, log);
+        let (crypto_enc, log_enc) = setup_enc_context(DigestAlg::Sha256);
+        // let (crypto_dec, log_dec) = setup_dec_context(DigestAlg::Sha256);
+
+        let enc = EncryptSegmentWorker::new(crypto_enc, log_enc);
+        // let dec = DecryptSegmentWorker::new(crypto_dec, log_dec);
 
         let (tx, rx) = unbounded();
         let (out_tx, out_rx) = unbounded();
@@ -311,17 +339,17 @@ use crypto_core::stream_v2::segmenting::types::SegmentFlags;
 
         tx.send(EncryptSegmentInput { 
             segment_index: 9, 
-            plaintext: payload.clone(),
-            compressed_len: 0,
+            bytes: payload.clone(),
             flags: SegmentFlags::empty(), 
+            stage_times: StageTimes::default(),
         }).unwrap();
         let a = out_rx.recv().unwrap().unwrap();
 
         tx.send(EncryptSegmentInput { 
             segment_index: 9, 
-            plaintext: payload,
-            compressed_len: 0,
+            bytes: payload,
             flags: SegmentFlags::empty(),
+            stage_times: StageTimes::default(),
          }).unwrap();
         let b = out_rx.recv().unwrap().unwrap();
 
@@ -332,10 +360,11 @@ use crypto_core::stream_v2::segmenting::types::SegmentFlags;
 
     #[test]
     fn telemetry_counters_are_consistent() {
-        let (crypto, log) = setup_test_context(DigestAlg::Sha256);
+        let (crypto_enc, log_enc) = setup_enc_context(DigestAlg::Sha256);
+        let (crypto_dec, log_dec) = setup_dec_context(DigestAlg::Sha256);
 
-        let enc = EncryptSegmentWorker::new(crypto.clone(), log.clone());
-        let dec = DecryptSegmentWorker::new(crypto, log);
+        let enc = EncryptSegmentWorker::new(crypto_enc, log_enc);
+        let dec = DecryptSegmentWorker::new(crypto_dec, log_dec);
 
         let (enc_tx, enc_rx) = unbounded();
         let (mid_tx, mid_rx) = unbounded();
@@ -352,17 +381,30 @@ use crypto_core::stream_v2::segmenting::types::SegmentFlags;
 
         enc_tx.send(EncryptSegmentInput {
             segment_index: 11,
-            plaintext,
-            compressed_len: 0,
+            bytes: plaintext,
             flags: SegmentFlags::empty(),
+            stage_times: StageTimes::default(),
         }).unwrap();
 
         let decrypted = dec_rx.recv().unwrap().unwrap();
 
-        assert!(decrypted.telemetry.frames_data > 0);
-        assert_eq!(decrypted.telemetry.frames_digest, 1);
-        assert_eq!(decrypted.telemetry.frames_terminator, 1);
-        assert!(decrypted.telemetry.bytes_plaintext > 0);
+        assert!(decrypted.counters.frames_data > 0);
+        assert_eq!(decrypted.counters.frames_digest, 1);
+        assert_eq!(decrypted.counters.frames_terminator, 1);
+        assert!(decrypted.counters.bytes_compressed > 0);
+
+        // Compare against raw byte slice
+        assert_eq!(decrypted.bytes.as_ref(), b"telemetry test");
+
+        // Compare against Vec<u8>
+        assert_eq!(decrypted.bytes.to_vec(), b"telemetry test".to_vec());
+
+        // Compare against &str (requires UTF‑8 conversion)
+        assert_eq!(std::str::from_utf8(decrypted.bytes.as_ref()).unwrap(), "telemetry test");
+
+        // Compare length explicitly
+        assert_eq!(decrypted.bytes.len(), "telemetry test".len());
+
     }
 
 }

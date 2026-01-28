@@ -47,6 +47,10 @@ lz4_flex.workspace = true
 zstd.workspace = true
 zstd-safe.workspace = true
 flate2.workspace = true
+futures.workspace = true
+bytemuck.workspace = true
+futures-intrusive.workspace = true
+
 
 # --- Serialization / framing ---
 byteorder.workspace = true

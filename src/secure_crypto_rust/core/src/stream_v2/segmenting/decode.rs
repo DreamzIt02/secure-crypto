@@ -12,10 +12,10 @@ pub fn parse_segment_header(wire: &[u8]) -> Result<SegmentHeader, SegmentError> 
     // --- fixed offsets ---
     let mut off = 0;
 
-    let segment_index = LittleEndian::read_u64(&wire[off..off + 8]);
-    off += 8;
+    let segment_index = LittleEndian::read_u32(&wire[off..off + 4]);
+    off += 4;
 
-    let compressed_len = LittleEndian::read_u32(&wire[off..off + 4]);
+    let bytes_len = LittleEndian::read_u32(&wire[off..off + 4]);
     off += 4;
 
     let wire_len = LittleEndian::read_u32(&wire[off..off + 4]);
@@ -40,7 +40,7 @@ pub fn parse_segment_header(wire: &[u8]) -> Result<SegmentHeader, SegmentError> 
 
     Ok(SegmentHeader {
         segment_index,
-        compressed_len,
+        bytes_len,
         wire_len,
         wire_crc32,
         frame_count,

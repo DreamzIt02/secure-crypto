@@ -6,28 +6,26 @@
 //! CLI tools, and services. Internals are strictly layered.
 
 
-pub mod framing;
-pub mod frame_worker;
+pub mod compression_worker;
+pub mod compression_pipeline;
+pub mod parallelism;
+pub mod pipeline;
+pub mod io;
+pub mod core;
+
 pub mod segmenting;
 pub mod segment_worker;
-pub mod pipeline;
-pub mod parallelism;
-pub mod io;
-// pub mod core;
-
-pub use parallelism::{
-    ParallelismProfile,
-    HybridParallelismProfile,
-};
+pub mod framing;
+pub mod frame_worker;
 
 pub use io::{
     InputSource,
     OutputSink,
 };
 
-// pub use core::{
-//     encrypt_stream_v2,
-//     decrypt_stream_v2,
-// };
+pub use core::{
+    encrypt_stream_v2,
+    decrypt_stream_v2,
+};
 
 

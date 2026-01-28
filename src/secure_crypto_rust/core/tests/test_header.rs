@@ -9,7 +9,7 @@
 #[cfg(test)]
 mod tests {
 
-use crypto_core::{compression::enum_name_or_hex, constants::{MAX_CHUNK_SIZE, flags}, headers::{AadDomain, AlgProfile, CipherSuite, HEADER_LEN_V1, HeaderError, HeaderV1, HkdfPrf, Strategy, fmt_bytes}};
+use crypto_core::{compression::enum_name_or_hex, constants::{MAX_CHUNK_SIZE, flags}, headers::{AadDomain, AlgProfile, CipherSuite, HeaderError, HeaderV1, HkdfPrf, Strategy, fmt_bytes}};
 
 // ## 1️⃣ Enum registry verification tests
 
@@ -186,7 +186,7 @@ use crypto_core::{compression::enum_name_or_hex, constants::{MAX_CHUNK_SIZE, fla
 
     #[test]
     fn header_v1_size_is_stable() {
-        assert_eq!(std::mem::size_of::<HeaderV1>(), HEADER_LEN_V1);
+        assert_eq!(std::mem::size_of::<HeaderV1>(), HeaderV1::LEN);
     }
 
     #[test]

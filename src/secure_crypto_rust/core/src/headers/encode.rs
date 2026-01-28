@@ -9,7 +9,6 @@
 //! - Validation is performed before encoding to fail fast on invalid headers.
 //! - Returns a fixed `[u8; HEADER_LEN_V1]` buffer on success.
 
-use crate::headers::types::{HEADER_LEN_V1};
 use crate::headers::types::{HeaderV1, HeaderError};
 
 /// Serialize a `HeaderV1` into an 80‑byte buffer in little‑endian order.
@@ -23,13 +22,12 @@ use crate::headers::types::{HeaderV1, HeaderError};
 /// - Uses helper functions for compact little‑endian writes.
 /// - Debug assertion ensures exactly 80 bytes are written.
 #[inline]
-pub fn encode_header_le(h: &HeaderV1) -> Result<[u8; HEADER_LEN_V1], HeaderError> {
+pub fn encode_header_le(h: &HeaderV1) -> Result<[u8; HeaderV1::LEN], HeaderError> {
     // Validate header fields before encoding.
-    // Better call from caller explicitly before calling this function
-    // validate_header(h)?;
+    h.validate()?;
 
     // Fixed output buffer of 80 bytes.
-    let mut out = [0u8; HEADER_LEN_V1];
+    let mut out = [0u8; HeaderV1::LEN];
     // Write cursor index.
     let mut i = 0usize;
 
@@ -52,6 +50,7 @@ pub fn encode_header_le(h: &HeaderV1) -> Result<[u8; HEADER_LEN_V1], HeaderError
     }
 
     // Field order must match HeaderV1 layout and documentation.
+    // Write everything up to plaintext_size (offset 0..32)
     put_bytes(&mut out, &mut i, &h.magic);       // 0..4   magic number
     put_u16(&mut out, &mut i, h.version);        // 4..6   version
     put_u16(&mut out, &mut i, h.alg_profile);    // 6..8   algorithm profile
@@ -63,7 +62,13 @@ pub fn encode_header_le(h: &HeaderV1) -> Result<[u8; HEADER_LEN_V1], HeaderError
     put_u16(&mut out, &mut i, h.flags);          // 18..20 flags bitmask
     put_u32(&mut out, &mut i, h.chunk_size);     // 20..24 chunk size
     put_u64(&mut out, &mut i, h.plaintext_size); // 24..32 total plaintext size
-    put_u32(&mut out, &mut i, h.crc32);          // 32..36 CRC32 checksum
+
+    // Compute CRC32 over the first 32 bytes
+    let computed_crc = crc32fast::hash(&out[0..32]); 
+    // write computed CRC directly, instead of h.crc32 
+    
+    // Now write crc32 and the rest
+    put_u32(&mut out, &mut i, computed_crc);     // 32..36 CRC32 checksum
     put_u32(&mut out, &mut i, h.dict_id);        // 36..40 dictionary ID
     put_bytes(&mut out, &mut i, &h.salt);        // 40..56 salt (16 bytes)
     put_u32(&mut out, &mut i, h.key_id);         // 56..60 key identifier
@@ -72,7 +77,7 @@ pub fn encode_header_le(h: &HeaderV1) -> Result<[u8; HEADER_LEN_V1], HeaderError
     put_bytes(&mut out, &mut i, &h.reserved);    // 72..80 reserved bytes
 
     // Sanity check: ensure we wrote exactly HEADER_LEN_V1 bytes.
-    debug_assert_eq!(i, HEADER_LEN_V1, "encoding wrote incorrect length");
+    debug_assert_eq!(i, HeaderV1::LEN, "encoding wrote incorrect length");
 
     Ok(out)
 }

@@ -94,11 +94,11 @@ We now have:
 
 ## 📊 Comparison of Approaches
 
-| Approach                        | Used By (Examples)                          | Pros | Cons |
-|---------------------------------|---------------------------------------------|------|------|
-| **Length in header**            | TLS, OpenSSL, GnuTLS                        | Deterministic, no dummy segment | Requires header integrity |
-| **Dedicated final marker segment** | FPGA AES pipelines, ParallelCryptography repo | Simple, explicit, works with streams | Adds one extra segment |
-| **Padding + final flag**        | DES/AES many‑core accelerators              | Compatible with block ciphers | Slight overhead in padding |
+| Approach                           | Used By (Examples)                            | Pros                                 | Cons                       |
+|------------------------------------|-----------------------------------------------|--------------------------------------|----------------------------|
+| **Length in header**               | TLS, OpenSSL, GnuTLS                          | Deterministic, no dummy segment      | Requires header integrity  |
+| **Dedicated final marker segment** | FPGA AES pipelines, ParallelCryptography repo | Simple, explicit, works with streams | Adds one extra segment     |
+| **Padding + final flag**           | DES/AES many‑core accelerators                | Compatible with block ciphers        | Slight overhead in padding |
 
 ---
 
@@ -180,9 +180,9 @@ impl OrderedEncryptedWriter<'_> {
         Ok(())
     }
 
-    pub fn finish(&mut self, final_segment: Option<u64>) -> Result<(), StreamError> {
+    pub fn finish(&mut self, final_segment: Option<u32>) -> Result<(), StreamError> {
         // Flush all buffered segments in order
-        for idx in 0..=final_segment.unwrap_or(self.buffer.len() as u64 - 1) {
+        for idx in 0..=final_segment.unwrap_or(self.buffer.len() as u32 - 1) {
             if let Some(wire) = self.buffer.remove(&idx) {
                 self.writer.write_all(&wire)?;
             }
@@ -276,3 +276,178 @@ No changes needed — `io::read_segment` will return the empty final segment hea
 * **Extensible**: Works with compression/resume features later.
 
 ---
+
+## 🔧 How to propagate errors
+
+We need a way to bubble up **both crypto worker errors** and **decompression worker errors** to the top‑level `Result`.
+
+### Pattern
+
+* Use a shared error channel (`Sender<StreamError>`).  
+* Each worker thread sends its error into that channel.  
+* The main thread checks the channel before finishing and returns the first error.
+
+---
+
+### Example patch
+
+```rust
+// ---- Channels ----
+let (seg_tx, seg_rx) = bounded::<DecryptSegmentInput>(profile.inflight_segments());
+let (crypto_out_tx, crypto_out_rx) = bounded::<Result<DecryptedSegment, SegmentWorkerError>>(profile.inflight_segments());
+let (decomp_out_tx, decomp_out_rx) = bounded::<Result<DecryptedSegment, SegmentWorkerError>>(profile.inflight_segments());
+let (decomp_in_tx, decomp_in_rx) = bounded::<DecryptedSegment>(profile.inflight_segments());
+
+// Error channel
+let (err_tx, err_rx) = bounded::<StreamError>(1);
+```
+
+---
+
+#### Crypto adapter
+
+```rust
+scope.spawn({
+    let decomp_in_tx = decomp_in_tx.clone();
+    let err_tx = err_tx.clone();
+    move || {
+        for res in crypto_out_rx.iter() {
+            match res {
+                Ok(seg) => {
+                    if decomp_in_tx.send(seg).is_err() {
+                        break;
+                    }
+                }
+                Err(e) => {
+                    eprintln!("[PIPELINE] crypto worker error: {e}");
+                    let _ = err_tx.send(StreamError::SegmentWorker(e));
+                    break;
+                }
+            }
+        }
+    }
+});
+```
+
+---
+
+#### Decompression workers
+
+Change `spawn_decompression_workers` so they send `Result<DecryptedSegment, SegmentWorkerError>` instead of plain `DecryptedSegment`. Then adapt:
+
+```rust
+spawn_decompression_workers(profile.clone(), codec_info, decomp_in_rx, decomp_out_tx);
+```
+
+And in the writer loop:
+
+```rust
+for res in decomp_out_rx.iter() {
+    match res {
+        Ok(segment) => {
+            eprintln!("[WRITER] receiving segment {}", segment.header.segment_index);
+            if segment.header.flags.contains(SegmentFlags::FINAL_SEGMENT) && segment.bytes.is_empty() {
+                last_segment_index = segment.header.segment_index;
+            }
+            ordered_writer.push(segment)?;
+        }
+        Err(e) => {
+            eprintln!("[PIPELINE] decompression worker error: {e}");
+            return Err(StreamError::SegmentWorker(e));
+        }
+    }
+}
+```
+
+---
+
+#### Final error check
+
+Before returning telemetry:
+
+```rust
+if let Ok(err) = err_rx.try_recv() {
+    return Err(err);
+}
+```
+
+---
+
+## Telemetry
+
+### Encrypt
+
+```rust
+    // Writing / stream header
+    timer.stage_times.add(Stage::Write, start.elapsed());
+
+    // Read / chunking / before compress
+    let final_times = read_stage_times.lock().unwrap(); 
+    for (stage, dur) in final_times.iter() { timer.add_stage_time(*stage, *dur); }
+
+    // Compression / segment
+    let final_times = compression_stage_times.lock().unwrap(); 
+    for (stage, dur) in final_times.iter() { timer.add_stage_time(*stage, *dur); }
+
+    // Encryption
+    for (stage, dur) in encryption_stage_times.iter() {
+        timer.add_stage_time(*stage, *dur);
+    }
+
+    // Writing / wiring
+    encryption_stage_times.add(Stage::Write, start.elapsed());
+
+```
+
+### Decrypt
+
+```rust
+    // Validation / stream header
+    timer.stage_times.add(Stage::Validate, start.elapsed());
+
+    // merge read stage_times
+    let final_times = read_stage_times.lock().unwrap(); 
+    for (stage, dur) in final_times.iter() { timer.add_stage_time(*stage, *dur); }
+
+    // merge decryption stage_times
+    let final_times = decryption_stage_times.lock().unwrap(); 
+    for (stage, dur) in final_times.iter() { timer.add_stage_time(*stage, *dur); }
+
+    // merge decompression stage_times
+    decompression_stage_times.merge(&segment.stage_times);
+
+    // Writing / wiring
+    decompression_stage_times.add(Stage::Write, start.elapsed());
+```
+
+### Encrypt (Counters)
+
+```rust
+    // Calculate len of overhead bytes / stream header
+    counters.bytes_overhead += HeaderV1::LEN
+
+    // update bytes_plaintext len
+    counters.bytes_plaintext = counters_local.lock().unwrap().bytes_plaintext;
+
+    // update bytes_compressed len
+    counters.bytes_compressed = counters_local.lock().unwrap().bytes_compressed;
+
+    // 🔥 Merge telemetry from this segment worker
+    counters.merge(&encrypted.counters);
+```
+
+### Decrypt (Counters)
+
+```rust
+    // Calculate len of overhead bytes / stream header
+    counters.bytes_overhead += HeaderV1::LEN
+
+    // update bytes_ciphertext len
+    counters.bytes_ciphertext = counters_local.lock().unwrap().bytes_ciphertext;
+
+    // 🔥 Merge telemetry from this segment worker
+    counters.merge(&encrypted.counters);
+
+    // update bytes_plaintext
+    counters.bytes_plaintext += segment.bytes.len() as u64;
+```

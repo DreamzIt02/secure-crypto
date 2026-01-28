@@ -19,7 +19,7 @@ use crate::constants::{MAGIC_RSE1, DEFAULT_CHUNK_SIZE, MAX_CHUNK_SIZE};
 use crate::constants::{cipher_ids, prf_ids, flags};
 
 /// Fixed header size in bytes.
-pub const HEADER_LEN_V1: usize = 80;
+// pub const HEADER_LEN_V1: usize = 80;
 
 /// Strategy choices for encoder metadata (decoder may still parallelize).
 #[repr(u16)]
@@ -127,7 +127,7 @@ impl AadDomain {
 /// - Salt provides per-stream nonce uniqueness.
 /// - Reserved bytes allow safe extension without breaking ABI.
 #[repr(C)]
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Copy, Clone, PartialEq)]
 pub struct HeaderV1 {
     pub magic: [u8; 4],        // "RSE1" magic marker
     pub version: u16,          // protocol version
@@ -184,6 +184,17 @@ impl Default for HeaderV1 {
 
 
 impl HeaderV1 {
+    /// Fixed header size in bytes.
+    pub const LEN: usize = 80; 
+    // pub const LEN: usize = 8  // segment_index
+    //     + 4                  // compressed_len
+    //     + 4                  // wire_len
+    //     + 4                  // wire_crc32
+    //     + 4                  // frame_count
+    //     + 2                  // digest_alg
+    //     + 2                  // flags
+    //     + 2;                 // reserved
+
     /// Canonical header for tests.
     /// Guaranteed to pass `validate()` unless a regression is introduced.
     pub fn test_header() -> Self {
@@ -193,7 +204,7 @@ impl HeaderV1 {
             alg_profile: AlgProfile::Chacha20Poly1305HkdfSha256 as u16,
             cipher: CipherSuite::Chacha20Poly1305 as u16,
             hkdf_prf: HkdfPrf::Sha256 as u16,
-            compression: CompressionCodec::Auto as u16,
+            compression: CompressionCodec::Deflate as u16,
             strategy: Strategy::Sequential as u16,
             aad_domain: AadDomain::Generic as u16,
             flags: 0,
@@ -334,6 +345,9 @@ pub enum HeaderError {
     /// Invalid magic marker (expected "RSE1").
     InvalidMagic { have: [u8; 4], need: [u8; 4] },
 
+    /// Invalid crc32 marker (expected "RSE1").
+    InvalidCrc32 { have: usize, need: usize },
+
     /// Invalid version (e.g., zero or unsupported).
     InvalidVersion { have: u16 },
 
@@ -382,6 +396,8 @@ impl fmt::Display for HeaderError {
                 write!(f, "header buffer too short: {} < {}", have, need),
             InvalidMagic { have, need  } =>
                 write!(f, "invalid magic: expected {}, got {}", fmt_bytes(need), fmt_bytes(have)),
+            InvalidCrc32 { have, need  } =>
+                write!(f, "invalid crc32: expected {}, got {}", need, have),
 
             InvalidVersion { have } =>
                 write!(f, "invalid version: {}", have),

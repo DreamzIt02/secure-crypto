@@ -14,7 +14,7 @@ use crate::crypto::{DigestError, digest::{DigestAlg, DigestState}};
 
 pub trait Checkpointable: Send + Sync {
     fn export(&self) -> Vec<u8>;
-    fn segment_index(&self) -> u64;
+    fn segment_index(&self) -> u32;
     fn summary(&self) -> String;
     fn as_any(&self) -> &dyn Any; 
 }
@@ -44,13 +44,13 @@ impl SerializedState {
 #[derive(Debug, Clone)]
 pub struct SegmentCheckpoint {
     pub alg: DigestAlg,
-    pub segment_index: u64,
+    pub segment_index: u32,
     pub next_frame_index: u32,
     pub state: SerializedState, 
 }
 
 impl SegmentCheckpoint {
-    pub fn from_state(alg: DigestAlg, segment_index: u64, next_frame_index: u32, state: &DigestState) -> Self {
+    pub fn from_state(alg: DigestAlg, segment_index: u32, next_frame_index: u32, state: &DigestState) -> Self {
         let state = match state {
             DigestState::Sha256(h)   => SerializedState::Sha256(h.serialize()),
             DigestState::Sha512(h)   => SerializedState::Sha512(h.serialize()),
@@ -78,7 +78,7 @@ impl SegmentCheckpoint {
 
 impl Checkpointable for SegmentCheckpoint {
     fn export(&self) -> Vec<u8> { self.state.to_bytes() }
-    fn segment_index(&self) -> u64 { self.segment_index }
+    fn segment_index(&self) -> u32 { self.segment_index }
     fn summary(&self) -> String { format!("SegmentCheckpoint: alg={:?}, segment={}, next={}", self.alg, self.segment_index, self.next_frame_index) }
     fn as_any(&self) -> &dyn Any { self }
 }
@@ -108,14 +108,14 @@ impl DecryptState {
 }
 
 pub struct DecryptCheckpoint {
-    pub segment_index: u64,
+    pub segment_index: u32,
     pub frame_index: u32,
     pub state: DecryptState,
 }
 
 impl Checkpointable for DecryptCheckpoint {
     fn export(&self) -> Vec<u8> { self.state.to_bytes() }
-    fn segment_index(&self) -> u64 { self.segment_index }
+    fn segment_index(&self) -> u32 { self.segment_index }
     fn summary(&self) -> String { format!("DecryptCheckpoint: segment={}, frame={}", self.segment_index, self.frame_index) }
     fn as_any(&self) -> &dyn Any { self }
 }

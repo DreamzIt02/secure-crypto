@@ -12,7 +12,7 @@
 // Zstd has a block compression API (`zstd::bulk::compress` / `decompress`) that produces standalone compressed blocks. Each block can be decompressed independently.
 use std::io::{Cursor, BufReader};
 
-use crate::compression::types::{Compressor, Decompressor, CompressionError};
+use crate::compression::{compute_checksum, types::{CompressionError, Compressor, Decompressor}, verify_checksum};
 
 /// Zstd streaming compressor.
 /// - Holds an encoder writing into an internal Vec.
@@ -29,7 +29,6 @@ pub struct ZstdDecompressor {
     _buffer: Vec<u8>,
     _decoder: Option<zstd::stream::Decoder<'static, BufReader<Cursor<Vec<u8>>>>>,
 }
-
 
 impl ZstdCompressor {
     /// Create a new Zstd compressor with given level and optional dictionary.
@@ -64,6 +63,11 @@ impl Compressor for ZstdCompressor {
         let orig_len = input.len() as u32;
         out.extend_from_slice(&orig_len.to_le_bytes());
         out.extend_from_slice(&compressed);
+
+        // Append CRC32 of original plaintext
+        let checksum = compute_checksum(input, None);
+        out.extend_from_slice(&checksum.to_le_bytes());
+        
         Ok(())
     }
 
@@ -101,20 +105,36 @@ impl ZstdDecompressor {
 
 impl Decompressor for ZstdDecompressor {
     fn decompress_chunk(&mut self, input: &[u8], out: &mut Vec<u8>) -> Result<(), CompressionError> {
-        if input.len() < 4 {
+        if input.len() < 8 {
             return Err(CompressionError::CodecProcessFailed {
                 codec: "zstd".into(),
-                msg: "input too short for length prefix".into(),
+                msg: "input too short for length+checksum".into(),
             });
         }
 
         // Read original length prefix
         let orig_len = u32::from_le_bytes(input[0..4].try_into().unwrap()) as usize;
-        let compressed = &input[4..];
+
+        // compressed data is everything except the last 4 bytes
+        let compressed = &input[4..input.len() - 4];
+        let checksum_bytes = &input[input.len() - 4..];
+        let expected_crc = u32::from_le_bytes(checksum_bytes.try_into().unwrap());
 
         // Decompress with known output size
         let decompressed = zstd::bulk::decompress(compressed, orig_len)
             .map_err(|e| CompressionError::CodecProcessFailed { codec: "zstd".into(), msg: e.to_string() })?;
+
+        // Optional sanity check: verify decoded size matches prefix
+        if decompressed.len() != orig_len {
+            return Err(CompressionError::CodecProcessFailed {
+                codec: "zstd".into(),
+                msg: format!("decoded size {} != prefix {}", decompressed.len(), orig_len),
+            });
+        }
+
+        // Verify checksum
+        let actual_crc = compute_checksum(&decompressed, None);
+        verify_checksum(expected_crc, actual_crc, "zstd".into())?;
 
         out.extend_from_slice(&decompressed);
         Ok(())

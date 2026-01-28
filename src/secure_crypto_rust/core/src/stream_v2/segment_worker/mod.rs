@@ -20,7 +20,8 @@ pub use types::{
     DecryptSegmentInput,
     EncryptedSegment,
     DecryptedSegment,
-    SegmentCryptoContext,
+    EncryptContext,
+    DecryptContext,
     SegmentWorkerError,
 };
 

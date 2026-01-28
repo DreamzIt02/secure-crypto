@@ -17,7 +17,7 @@
 
 ```rust
 EncryptSegmentInput {
-    segment_index: u64,
+    segment_index: u32,
     plaintext: Bytes,
 }
 ```

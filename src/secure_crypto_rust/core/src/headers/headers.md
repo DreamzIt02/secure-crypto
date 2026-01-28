@@ -34,30 +34,32 @@ This header is designed for portability, future-proofing, and high-assurance ope
 
 ## 80-byte header layout (recommended)
 
-| Offset | Size | Field | Description |
-|-------:|-----:|-------|-------------|
-| 0 | 4 | **Magic** | e.g., b"RSE1" |
-| 4 | 2 | **Protocol version** | Header/envelope version |
-| 6 | 2 | **Algorithm profile** | Bundle ID (cipher + HKDF PRF) |
-| 8 | 2 | **Cipher suite** | Enum (AES‑256‑GCM, ChaCha20‑Poly1305) |
-| 10 | 2 | **HKDF PRF** | Enum (SHA‑256, SHA‑512, BLAKE3 keyed) |
-| 12 | 2 | **Compression type** | Enum (None, Zstd, LZ4, Deflate) |
-| 14 | 2 | **Strategy** | Sequential/Parallel/Auto |
-| 16 | 2 | **AAD domain** | Small ID to bind AAD context (e.g., 0x0001) |
-| 18 | 2 | **Flags** | Bitmask (HAS_TOTAL_LEN, HAS_CRC32, …) |
-| 20 | 4 | **Chunk size** | Target plaintext bytes per frame |
-| 24 | 8 | **Plaintext size** | 0 if unknown |
-| 32 | 4 | **CRC32** | 0 if not provided |
-| 36 | 4 | **Dict ID** | Compression dictionary ID |
-| 40 | 16 | **Salt (nonce base)** | Random per stream |
-| 56 | 4 | **Key ID** | Master key registry reference |
-| 60 | 4 | **Parallelism hint** | 0 if none (e.g., worker count) |
-| 64 | 8 | **Encoder time ns** | Optional monotonic timestamp |
-| 72 | 8 | **Reserved** | Future use; zeroed |
-| — | — | **Total: 80 bytes** | Fixed-length |
+| Offset | Size | Field                 | Description                                 |
+|-------:|-----:|-----------------------|---------------------------------------------|
+| 0      | 4    | **Magic**             | e.g., b"RSE1"                               |
+| 4      | 2    | **Protocol version**  | Header/envelope version                     |
+| 6      | 2    | **Algorithm profile** | Bundle ID (cipher + HKDF PRF)               |
+| 8      | 2    | **Cipher suite**      | Enum (AES‑256‑GCM, ChaCha20‑Poly1305)       |
+| 10     | 2    | **HKDF PRF**          | Enum (SHA‑256, SHA‑512, BLAKE3 keyed)       |
+| 12     | 2    | **Compression type**  | Enum (None, Zstd, LZ4, Deflate)             |
+| 14     | 2    | **Strategy**          | Sequential/Parallel/Auto                    |
+| 16     | 2    | **AAD domain**        | Small ID to bind AAD context (e.g., 0x0001) |
+| 18     | 2    | **Flags**             | Bitmask (HAS_TOTAL_LEN, HAS_CRC32, …)       |
+| 20     | 4    | **Chunk size**        | Target plaintext bytes per frame            |
+| 24     | 8    | **Plaintext size**    | 0 if unknown                                |
+| 32     | 4    | **CRC32**             | 0 if not provided                           |
+| 36     | 4    | **Dict ID**           | Compression dictionary ID                   |
+| 40     | 16   | **Salt (nonce base)** | Random per stream                           |
+| 56     | 4    | **Key ID**            | Master key registry reference               |
+| 60     | 4    | **Parallelism hint**  | 0 if none (e.g., worker count)              |
+| 64     | 8    | **Encoder time ns**   | Optional monotonic timestamp                |
+| 72     | 8    | **Reserved**          | Future use; zeroed                          |
+| *      | *    | **Total: 80 bytes**   | Fixed-length                                |
+
+---
 
 > Notes
-> ---
+>> ---
 > The 80‑byte plan buys clarity and future space.
 
 ---

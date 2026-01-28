@@ -8,8 +8,8 @@ use crate::stream_v2::segmenting::{SegmentHeader, types::SegmentError};
 /// Layout:
 ///
 /// ```text
-/// [ segment_index (8) ]
-/// [ compressed_len(4) ]
+/// [ segment_index (4) ]
+/// [ bytes_len     (4) ]
 /// [ wire_len      (4) ]
 /// [ wire_crc32    (4) ]
 /// [ frame_count   (2) ]
@@ -20,7 +20,6 @@ use crate::stream_v2::segmenting::{SegmentHeader, types::SegmentError};
 pub fn encode_segment(
     header: &SegmentHeader,
     segment_wire: &Bytes,
-    
 ) -> Result<Vec<u8>, SegmentError> {
     let expected = SegmentHeader::LEN + header.wire_len as usize;
 
@@ -34,8 +33,8 @@ pub fn encode_segment(
     let mut wire = Vec::with_capacity(expected);
 
     // --- Header ---
-    wire.write_u64::<LittleEndian>(header.segment_index).unwrap();
-    wire.write_u32::<LittleEndian>(header.compressed_len).unwrap();
+    wire.write_u32::<LittleEndian>(header.segment_index).unwrap();
+    wire.write_u32::<LittleEndian>(header.bytes_len).unwrap();
     wire.write_u32::<LittleEndian>(header.wire_len).unwrap();
     wire.write_u32::<LittleEndian>(header.wire_crc32).unwrap();
     wire.write_u32::<LittleEndian>(header.frame_count).unwrap();

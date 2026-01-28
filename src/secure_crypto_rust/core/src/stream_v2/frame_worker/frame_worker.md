@@ -87,7 +87,7 @@ wire = [ FrameHeader | Ciphertext ]
 use bytes::Bytes;
 
 pub struct EncryptedFrame {
-    pub segment_index: u64,
+    pub segment_index: u32,
     pub frame_index: u32,
     pub frame_type: FrameType,
     
@@ -188,7 +188,7 @@ let plaintext = decrypt(ciphertext)?;
 
 ```rust
 pub struct DecryptedFrame {
-    pub segment_index: u64,
+    pub segment_index: u32,
     pub frame_index: u32,
     pub frame_type: FrameType,
 
@@ -306,7 +306,7 @@ After this point:
 
 ### ✅ `Bytes` — best choice
 
-* Refcounted
+* Ref counted
 * Sliceable
 * Cheap clone
 * Built exactly for this
@@ -379,3 +379,27 @@ Everything else is a *view*.
 We’ve now reached the **final, optimal architecture**.
 
 ---
+
+## Telemetry
+
+### Encrypt
+
+```rust
+    // Validation
+    stage_times.add(Stage::Validate, start.elapsed());
+    // Encryption
+    stage_times.add(Stage::Encrypt, start.elapsed());
+    // Encoding
+    stage_times.add(Stage::Encode, start.elapsed());
+```
+
+### Decrypt
+
+```rust
+    // Decoding
+    stage_times.add(Stage::Decode, start.elapsed());
+    // Validation
+    stage_times.add(Stage::Validate, start.elapsed());
+    // Decryption
+    stage_times.add(Stage::Encrypt, start.elapsed());
+```

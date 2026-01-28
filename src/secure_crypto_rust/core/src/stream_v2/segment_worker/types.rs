@@ -5,8 +5,10 @@ use bytes::Bytes;
 use crate::crypto::{CryptoError, DigestAlg, DigestError, KEY_LEN_32};
 use crate::headers::types::HeaderV1;
 use crate::stream_v2::framing::{FrameError};
+use crate::stream_v2::parallelism::HybridParallelismProfile;
 use crate::stream_v2::segmenting::SegmentHeader;
-use crate::stream_v2::segmenting::types::SegmentFlags;
+use crate::stream_v2::segmenting::types::{SegmentError, SegmentFlags};
+use crate::telemetry::{StageTimes};
 use crate::telemetry::counters::TelemetryCounters;
 use crate::stream_v2::frame_worker::{FrameWorkerError};
 
@@ -40,24 +42,28 @@ pub const FRAME_SIZE_TABLE: &[(usize, usize)] = &[
 /// Input from reader stage (plaintext)
 #[derive(Debug, Clone)]
 pub struct EncryptSegmentInput {
-    pub segment_index: u64,  // u64 matches our frame header type
-    pub plaintext: Bytes, // 🔥 zero-copy shared
+    pub segment_index: u32,  // u32 matches our frame header type
+    pub bytes: Bytes, // 🔥 zero-copy shared
     pub flags: SegmentFlags, // 🔥 final segment, or other flags bit input from pipeline
-    pub compressed_len: u32, // Calculate in caller after compress, before sending to the worker
+    // pub plaintext_len: u32, // Calculate in caller before compress, before sending to the worker
+    // pub compressed_len: u32, // Calculate in caller after compress, before sending to the worker
+    pub stage_times: StageTimes,
 }
 
 /// Output of encryption
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct EncryptedSegment {
     pub header: SegmentHeader,
     pub wire: Bytes, // 🔥 contiguous encoded frames
-    pub telemetry: TelemetryCounters,
+    pub counters: TelemetryCounters,
+    pub stage_times: StageTimes,
 }
 
 #[derive(Debug)]
 pub struct DecryptSegmentInput {
     pub header: SegmentHeader,
     pub wire: Bytes, // 🔥 shared, sliceable
+    // pub compressed_len: u32, // Calculate in caller after decompress, after receiving from the worker
 }
 
 // Convert EncryptedSegment → DecryptSegmentInput
@@ -71,65 +77,139 @@ impl From<EncryptedSegment> for DecryptSegmentInput {
 }
 
 /// Output of decryption
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct DecryptedSegment {
     pub header: SegmentHeader,
-    pub frames: Vec<Bytes>, // plaintext frames
-    pub telemetry: TelemetryCounters,
+    pub bytes: Bytes, // plaintext frames
+    pub counters: TelemetryCounters,
+    pub stage_times: StageTimes,
 }
 
 /// Immutable crypto context shared across workers
+// #[derive(Debug, Clone)]
+// pub struct SegmentCryptoContext {
+//     pub header: HeaderV1,
+//     pub profile: HybridParallelismProfile,
+//     pub session_key: [u8; KEY_LEN_32],
+//     pub digest_alg: DigestAlg,
+//     pub segment_size: usize,  // Our "chunk_size" from header: HeaderV1,
+//     pub frame_size: usize,    // Calculated
+// }
+
+// impl SegmentCryptoContext {
+//     pub fn new(
+//         header: HeaderV1,
+//         profile: HybridParallelismProfile,
+//         session_key: &[u8],
+//         digest_alg: DigestAlg,
+//         // segment_size: usize,  // Our "chunk_size" from header: HeaderV1,
+//         // frame_size: Option<usize>, // None = auto-calculate
+//     ) -> Result<Self, SegmentWorkerError> {
+//         //
+//         // Validate segment size in HeaderV1
+//         let segment_size = header.chunk_size as usize;
+
+//         if session_key.len() != KEY_LEN_32 {
+//             return Err(SegmentWorkerError::CryptoError(CryptoError::InvalidKeyLen { expected: KEY_LEN_32, actual: session_key.len() }));
+//         }
+
+//         let mut arr = [0u8; KEY_LEN_32];
+//         arr.copy_from_slice(session_key);
+
+//         // Auto-calculate optimal frame size
+//         // Calculate or validate frame size
+//         let frame_size = get_frame_size(segment_size);
+        
+//         Ok(Self {
+//             header: header,
+//             profile,
+//             session_key: arr,
+//             digest_alg,
+//             segment_size,
+//             frame_size,
+//         })
+//     }
+// }
+
 #[derive(Debug, Clone)]
-pub struct SegmentCryptoContext {
-    pub header: HeaderV1,
+pub struct CryptoContextBase {
+    pub profile: HybridParallelismProfile,
     pub session_key: [u8; KEY_LEN_32],
     pub digest_alg: DigestAlg,
-    pub worker_count: usize,
-    pub segment_size: usize,  // Our "chunk_size" from header: HeaderV1,
-    pub frame_size: usize,    // Calculated
+    pub segment_size: usize,
+    pub frame_size: usize,
 }
 
-impl SegmentCryptoContext {
+impl CryptoContextBase {
     pub fn new(
-        header: HeaderV1,
+        profile: HybridParallelismProfile,
         session_key: &[u8],
         digest_alg: DigestAlg,
-        worker_count: usize,
-        // segment_size: usize,  // Our "chunk_size" from header: HeaderV1,
-        // frame_size: Option<usize>, // None = auto-calculate
+        segment_size: usize,
     ) -> Result<Self, SegmentWorkerError> {
-        //
-        // Validate segment size in HeaderV1
-        let segment_size = header.chunk_size as usize;
-
-        if worker_count < 1 {
-            return Err(SegmentWorkerError::FrameWorkerError(FrameWorkerError::WorkerMissing));
-        }
-
         if session_key.len() != KEY_LEN_32 {
-            return Err(SegmentWorkerError::CryptoError(CryptoError::InvalidKeyLen { expected: KEY_LEN_32, actual: session_key.len() }));
+            return Err(SegmentWorkerError::CryptoError(
+                CryptoError::InvalidKeyLen { expected: KEY_LEN_32, actual: session_key.len() }
+            ));
         }
 
         let mut arr = [0u8; KEY_LEN_32];
         arr.copy_from_slice(session_key);
 
-        // Auto-calculate optimal frame size
-        // Calculate or validate frame size
         let frame_size = get_frame_size(segment_size);
-        
+
         Ok(Self {
-            header,
+            profile,
             session_key: arr,
             digest_alg,
-            worker_count,
             segment_size,
             frame_size,
         })
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct EncryptContext {
+    pub header: HeaderV1,
+    pub base: CryptoContextBase,
+}
+
+impl EncryptContext {
+    pub fn new(
+        header: HeaderV1,
+        profile: HybridParallelismProfile,
+        session_key: &[u8],
+        digest_alg: DigestAlg,
+    ) -> Result<Self, SegmentWorkerError> {
+        // Validate segment size in HeaderV1
+        let segment_size = header.chunk_size as usize;
+        let base = CryptoContextBase::new(profile, session_key, digest_alg, segment_size)?;
+        Ok(Self { header, base })
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct DecryptContext {
+    pub base: CryptoContextBase,
+    pub header: HeaderV1,
+}
+
+impl DecryptContext {
+    pub fn from_stream_header(
+        header: HeaderV1,
+        profile: HybridParallelismProfile,
+        session_key: &[u8],
+        digest_alg: DigestAlg,
+    ) -> Result<Self, SegmentWorkerError> {
+        let segment_size = header.chunk_size as usize;
+        let base = CryptoContextBase::new(profile, session_key, digest_alg, segment_size)?;
+        Ok(Self { base, header })
+    }
+}
+
 #[derive(Debug)]
 pub enum SegmentWorkerError {
+    StateError(String),
     InvalidSegment(String),
     CheckpointError(String),
     CheckpointRestoreFailed(String),
@@ -137,6 +217,7 @@ pub enum SegmentWorkerError {
     MissingTerminatorFrame,
 
     FrameWorkerError(FrameWorkerError),
+    SegmentError(SegmentError),
     DigestError(DigestError),
     FramingError(FrameError),
     CryptoError(CryptoError),
@@ -177,25 +258,18 @@ pub enum SegmentWorkerError {
 impl fmt::Display for SegmentWorkerError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            SegmentWorkerError::InvalidSegment(msg) =>
-                write!(f, "invalid segment: {}", msg),
-            SegmentWorkerError::CheckpointError(msg) =>
-                write!(f, "checkpoint persistence failed: {}", msg),
-            SegmentWorkerError::CheckpointRestoreFailed(msg) =>
-                write!(f, "checkpoint restore failed: {}", msg),
-            SegmentWorkerError::MissingDigestFrame =>
-                write!(f, "invalid segment: {}", "Missing mandatory digest frame"),
-            SegmentWorkerError::MissingTerminatorFrame =>
-                write!(f, "invalid segment: {}", "Missing mandatory terminator frame"),
+            SegmentWorkerError::StateError(msg) => write!(f, "invalid state: {}", msg),
+            SegmentWorkerError::InvalidSegment(msg) => write!(f, "invalid segment: {}", msg),
+            SegmentWorkerError::CheckpointError(msg) => write!(f, "checkpoint persistence failed: {}", msg),
+            SegmentWorkerError::CheckpointRestoreFailed(msg) => write!(f, "checkpoint restore failed: {}", msg),
+            SegmentWorkerError::MissingDigestFrame => write!(f, "invalid segment: {}", "Missing mandatory digest frame"),
+            SegmentWorkerError::MissingTerminatorFrame => write!(f, "invalid segment: {}", "Missing mandatory terminator frame"),
 
-            SegmentWorkerError::FrameWorkerError(e) =>
-                write!(f, "frame worker error: {}", e),
-            SegmentWorkerError::DigestError(e) =>
-                write!(f, "digest error: {}", e),
-            SegmentWorkerError::FramingError(e) =>
-                write!(f, "framing error: {}", e),
-            SegmentWorkerError::CryptoError(e) =>
-                write!(f, "crypto error: {}", e),
+            SegmentWorkerError::FrameWorkerError(e) => write!(f, "frame worker error: {}", e),
+            SegmentWorkerError::SegmentError(e) => write!(f, "segment error: {}", e),
+            SegmentWorkerError::DigestError(e) => write!(f, "digest error: {}", e),
+            SegmentWorkerError::FramingError(e) => write!(f, "framing error: {}", e),
+            SegmentWorkerError::CryptoError(e) => write!(f, "crypto error: {}", e),
         }
     }
 }
@@ -228,7 +302,7 @@ impl From<CryptoError> for SegmentWorkerError {
 pub fn optimal_frame_size(segment_size: usize) -> usize {
 
     const MIN_FRAMES_PER_SEGMENT: usize = 4;  // Minimum parallelization
-    const MAX_FRAMES_PER_SEGMENT: usize = 64; // Don't over-fragment
+    const _MAX_FRAMES_PER_SEGMENT: usize = 64; // Don't over-fragment
     
     // Calculate frame size to get reasonable frame count
     let ideal_frame_size = segment_size / 16; // Target ~16 frames
@@ -247,6 +321,8 @@ pub fn optimal_frame_size(segment_size: usize) -> usize {
     frame_size
 }
 
+// Auto-calculate optimal frame size
+// Calculate or validate frame size
 /// Get optimal frame size from lookup table
 pub fn get_frame_size(segment_size: usize) -> usize {
     FRAME_SIZE_TABLE

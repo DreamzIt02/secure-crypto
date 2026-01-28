@@ -234,7 +234,7 @@ impl DigestFrame {
 /// Digest input format (canonical):
 ///
 /// ```text
-/// segment_index   (u64 LE)
+/// segment_index   (u32 LE)
 /// frame_count     (u32 LE)
 /// for each DATA frame, ordered by frame_index:
 ///   frame_index   (u32 LE)
@@ -244,14 +244,14 @@ impl DigestFrame {
 pub struct SegmentDigestBuilder {
     pub alg: DigestAlg,
     pub state: DigestState,
-    pub segment_index: u64,
+    pub segment_index: u32,
     pub frame_count: u32,
     pub finalized: bool,
 }
 impl SegmentDigestBuilder {
     /// Create a new digest builder.
     #[inline]
-    pub fn new(alg: DigestAlg, segment_index: u64, frame_count: u32) -> Self {
+    pub fn new(alg: DigestAlg, segment_index: u32, frame_count: u32) -> Self {
         let mut state = DigestState::new(alg);
 
         // Feed segment header: MUST be done for a fresh segment
@@ -271,7 +271,7 @@ impl SegmentDigestBuilder {
     /// Used for frame-level resume within a single segment.
     pub fn with_state(
         state: DigestState,
-        segment_index: u64,
+        segment_index: u32,
         frame_count: u32,
     ) -> Self {
         // FIX: Extract the algorithm from the existing state
@@ -300,15 +300,6 @@ impl SegmentDigestBuilder {
         self.state.update(data);
     }
 
-    /// Feed segment header (exactly once).
-    #[inline]
-    pub fn start_segment(&mut self, segment_index: u64, frame_count: u32) {
-        self.segment_index = segment_index;
-        self.frame_count = frame_count;
-        self.update(&segment_index.to_le_bytes());
-        self.update(&frame_count.to_le_bytes());
-    }
-
     /// Feed one DATA frame (strictly ascending `frame_index`).
     #[inline]
     pub fn update_frame(&mut self, frame_index: u32, ciphertext: &[u8]) {
@@ -332,10 +323,10 @@ impl SegmentDigestBuilder {
 
 /// Streaming verifier (bit-exact with `DigestBuilder`).
 pub struct SegmentDigestVerifier {
-    alg: DigestAlg,
+    _alg: DigestAlg,
     state: DigestState,
     expected: Vec<u8>,
-    segment_index: u64,
+    segment_index: u32,
     frame_count: u32,
     finalized: bool,
 }
@@ -345,7 +336,7 @@ impl SegmentDigestVerifier {
     /// This hashes the segment header (index and frame count) immediately.
     pub fn new(
         alg: DigestAlg,
-        segment_index: u64,
+        segment_index: u32,
         frame_count: u32,
         expected: Vec<u8>,
     ) -> Self {
@@ -356,7 +347,7 @@ impl SegmentDigestVerifier {
         state.update(&frame_count.to_le_bytes());
 
         Self {
-            alg,
+            _alg: alg,
             state,
             expected,
             segment_index,
@@ -369,7 +360,7 @@ impl SegmentDigestVerifier {
     /// Used for frame-level resume within a single segment.
     pub fn with_state(
         state: DigestState,
-        segment_index: u64,
+        segment_index: u32,
         frame_count: u32,
         expected: Vec<u8>,
     ) -> Self {
@@ -381,7 +372,7 @@ impl SegmentDigestVerifier {
         // state was checkpointed. Re-hashing them would cause a digest mismatch.
 
         Self {
-            alg,
+            _alg: alg,
             state,
             expected,
             segment_index,
@@ -393,12 +384,19 @@ impl SegmentDigestVerifier {
     pub fn state(&self) -> DigestState {
         self.state.clone() // DigestState must implement Clone
     }
+
+    #[inline]
+    fn update(&mut self, data: &[u8]) {
+        debug_assert!(!self.finalized);
+        self.state.update(data);
+    }
+
+    /// Feed one DATA frame (strictly ascending `frame_index`).
     #[inline]
     pub fn update_frame(&mut self, frame_index: u32, ciphertext: &[u8]) {
-        debug_assert!(!self.finalized);
-        self.state.update(&frame_index.to_le_bytes());
-        self.state.update(&(ciphertext.len() as u32).to_le_bytes());
-        self.state.update(ciphertext);
+        self.update(&frame_index.to_le_bytes());
+        self.update(&(ciphertext.len() as u32).to_le_bytes());
+        self.update(ciphertext);
         println!("verifier input: seg={} frame_count={} frame_index={} ct_len={}",
             self.segment_index, self.frame_count, frame_index, ciphertext.len());
     }

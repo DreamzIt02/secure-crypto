@@ -1,6 +1,6 @@
 #[cfg(test)]
 mod tests {
-    use crypto_core::recovery::{LogManager, UnifiedEntry, compact_unified_log};
+    use crypto_core::recovery::{UnifiedEntry, compact_unified_log};
 
 
     // #[test]

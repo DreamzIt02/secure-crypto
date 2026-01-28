@@ -28,7 +28,7 @@ These are **high ROI** fields — not bloat.
 | Field                 | Why                                          |
 | --------------------- | -------------------------------------------- |
 | `plaintext_len`       | progress, resume, telemetry                  |
-| `compressed_len`      | progress, resume, telemetry                  |
+| `bytes_len`           | progress, resume, telemetry                  |
 | `crc32` or `xxhash64` | detect segment corruption *before decrypt*   |
 | `flags`               | future behaviors (compressed? last segment?) |
 | `reserved`            | forward compatibility                        |
@@ -49,14 +49,13 @@ These are **high ROI** fields — not bloat.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SegmentHeader {
     /// Monotonic segment number starting at 0
-    pub segment_index: u64,
+    pub segment_index: u32,
 
-    /// Total plaintext bytes represented by this segment
-    pub plaintext_len: u64, // Not required, this is exact slice of HeaderV1::chunk_size
+    /// Total plaintext (or maybe compressed) bytes represented by this segment before encrypt, and after decrypt
+    pub bytes_len: u32,
 
-    /// Total plaintext bytes represented by this segment
-    /// Calculate in caller after compress, before sending to the encrypt worker
-    pub compressed_len: u32,
+    /// Total encrypted+encoded bytes following this header (frames only), and before decrypt
+    pub wire_len: u32,
 
     /// Total encoded bytes following this header (frames only)
     pub wire_len: u32,
@@ -79,8 +78,8 @@ pub struct SegmentHeader {
 }
 
 impl SegmentHeader {
-    pub const LEN: usize = 8  // segment_index
-        + 4                  // compressed_len
+    pub const LEN: usize = 4  // segment_index
+        + 4                  // bytes_len
         + 4                  // wire_len
         + 4                  // wire_crc32
         + 4                  // frame_count
@@ -98,8 +97,9 @@ impl SegmentHeader {
 #[derive(Debug)]
 pub struct EncryptedSegment {
     pub header: SegmentHeader,
-    pub wire: Bytes, // contiguous encoded frames
-    pub telemetry: TelemetryCounters,
+    pub wire: Bytes, // 🔥 contiguous encoded frames
+    pub counters: TelemetryCounters,
+    pub stage_times: StageTimes,
 }
 ```
 
@@ -111,7 +111,7 @@ pub struct EncryptedSegment {
 
   * `wire_len`
   * `frame_count`
-  * `plaintext_len`
+  * `bytes_len`
   * optional `crc32`
 * **prepend or emit header separately** (our choice)
 

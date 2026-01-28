@@ -3,6 +3,7 @@ use bytes::Bytes;
 
 use crate::stream_v2::framing::types::{FrameError, FrameType};
 use crate::crypto::types::{CryptoError, NonceError, AadError};
+use crate::telemetry::StageTimes;
 
 #[derive(Debug)]
 pub enum FrameWorkerError {
@@ -82,7 +83,7 @@ impl From<FrameError> for FrameWorkerError {
 ///* protocol-native
 #[derive(Debug, Clone)]
 pub struct FrameInput {
-    pub segment_index: u64,
+    pub segment_index: u32,
     pub frame_index: u32,
     pub frame_type: FrameType,
     pub plaintext: Bytes, // 🔥 instead of Arc<[u8]>
@@ -139,7 +140,7 @@ impl FrameInput {
 /// Output of encryption
 #[derive(Debug)]
 pub struct EncryptedFrame {
-    pub segment_index: u64,
+    pub segment_index: u32,
     pub frame_index: u32,
     pub frame_type: FrameType,
     
@@ -147,6 +148,7 @@ pub struct EncryptedFrame {
     pub wire: Bytes,
     /// Ciphertext view inside `wire`
     pub ct_range: std::ops::Range<usize>,
+    pub stage_times: StageTimes,
 }
 
 impl EncryptedFrame {
@@ -159,7 +161,7 @@ impl EncryptedFrame {
 /// Output of decryption
 #[derive(Debug)]
 pub struct DecryptedFrame {
-    pub segment_index: u64,
+    pub segment_index: u32,
     pub frame_index: u32,
     pub frame_type: FrameType,
 
@@ -170,6 +172,7 @@ pub struct DecryptedFrame {
 
     /// Decrypted plaintext
     pub plaintext: Bytes,
+    pub stage_times: StageTimes,
 }
 
 impl DecryptedFrame {

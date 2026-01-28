@@ -41,7 +41,7 @@ This allows:
 
 ```bash
 DigestInput :=
-    segment_index          (u64, LE)
+    segment_index          (u32, LE)
     frame_count            (u32, LE)
     for frame_index = 0 .. frame_count-1:
         frame_index        (u32, LE)
@@ -263,7 +263,7 @@ This ensures:
 This **must be identical** on encrypt & decrypt:
 
 ```text
-segment_index   (u64 LE)
+segment_index   (u32 LE)
 frame_count     (u32 LE)
 for each DATA frame ordered by frame_index:
   frame_index   (u32 LE)

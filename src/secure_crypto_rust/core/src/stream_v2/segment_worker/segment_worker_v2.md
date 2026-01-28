@@ -137,13 +137,13 @@ This makes the encrypt and decrypt workers **symmetric** in their resume/checkpo
 ```rust
 // For Encryption
 pub struct EncryptSegmentInput {
-    pub segment_index: u64,  // u64 matches our frame header type
+    pub segment_index: u32,  // u32 matches our frame header type
     pub plaintext: Vec<u8>,   // Single plaintext blob, not pre-framed
 }
 
 // For Decryption  
 pub struct DecryptSegmentInput {
-    pub segment_index: u64,
+    pub segment_index: u32,
     pub wire: Arc<Vec<u8>>,  // Encrypted wire bytes (zero-copy via Arc)
 }
 ```
@@ -151,7 +151,7 @@ pub struct DecryptSegmentInput {
 **Why this is best:**
 
 - ✅ Explicit segment_index eliminates ambiguity
-- ✅ `u64` matches `FrameHeader::segment_index` type
+- ✅ `u32` matches `FrameHeader::segment_index` type
 - ✅ `Arc<Vec<u8>>` for wire bytes enables zero-copy sharing
 - ✅ `Vec<u8>` for plaintext is fine (it's moved, not shared)
 - ✅ Worker does the framing internally (single responsibility)
@@ -317,11 +317,11 @@ pub fn get_frame_size(segment_size: usize) -> usize {
 
 ### Why Dynamic Frame Sizing?
 
-| Segment Size | Fixed 16 KiB Frames | Dynamic Frames | Benefit |
-|--------------|---------------------|----------------|---------|
-| 16 KiB | 1 frame (no parallelization) | 4 KiB × 4 frames | 4× parallelization ✅ |
-| 64 KiB | 16 KiB × 4 frames | 16 KiB × 4 frames | Optimal ✅ |
-| 4 MiB | 16 KiB × 256 frames | 64 KiB × 64 frames | Less overhead ✅ |
+| Segment Size | Fixed 16 KiB Frames          | Dynamic Frames     | Benefit               |
+|--------------|------------------------------|--------------------|-----------------------|
+| 16 KiB       | 1 frame (no parallelization) | 4 KiB × 4 frames   | 4× parallelization ✅ |
+| 64 KiB       | 16 KiB × 4 frames            | 16 KiB × 4 frames  | Optimal ✅            |
+| 4 MiB        | 16 KiB × 256 frames          | 64 KiB × 64 frames | Less overhead ✅      |
 
 **Dynamic sizing gives:**
 
@@ -398,14 +398,14 @@ use bytes::Bytes;
 /// Input from reader stage (plaintext)
 #[derive(Debug, Clone)]
 pub struct EncryptSegmentInput {
-    pub segment_index: u64,
+    pub segment_index: u32,
     pub plaintext: Bytes, // 🔥 zero-copy shared
 }
 
 /// Output of encryption
 #[derive(Debug)]
 pub struct EncryptedSegment {
-    pub segment_index: u64,
+    pub segment_index: u32,
     pub wire: Bytes, // 🔥 contiguous encoded frames
     pub telemetry: TelemetryCounters,
 }
@@ -418,20 +418,20 @@ use bytes::Bytes;
 
 #[derive(Debug)]
 pub struct DecryptSegmentInput {
-    pub segment_index: u64,
+    pub segment_index: u32,
     pub wire: Bytes, // 🔥 shared, sliceable
 }
 
 #[derive(Debug)]
 pub struct DecryptedSegment {
-    pub segment_index: u64,
+    pub segment_index: u32,
     pub frames: Vec<Bytes>, // plaintext frames
     pub telemetry: TelemetryCounters,
 }
 ```
 
-✅ **Arc<Vec<u8>> is gone forever**
-✅ **Vec<u8> only appears at AEAD boundary**
+✅ **```Arc<Vec<u8>>``` is gone forever**
+✅ **```Vec<u8>``` only appears at AEAD boundary**
 
 ---
 
@@ -442,7 +442,7 @@ pub struct DecryptedSegment {
 ```rust
 #[derive(Debug, Clone)]
 pub struct FrameInput {
-    pub segment_index: u64,
+    pub segment_index: u32,
     pub frame_index: u32,
     pub frame_type: FrameType,
     pub plaintext: Bytes, // 🔥 instead of Arc<[u8]>
@@ -483,7 +483,7 @@ while offset < segment_wire.len() {
 ```rust
 #[derive(Debug)]
 pub struct DecryptedFrame {
-    pub segment_index: u64,
+    pub segment_index: u32,
     pub frame_index: u32,
     pub frame_type: FrameType,
     pub wire: Bytes,
@@ -562,3 +562,109 @@ We now have:
 - **Digest without duplication**
 - **Resume-safe wire format**
 - **Tokio / async ready buffers**
+
+---
+
+## Telemetry
+
+### Encrypt
+
+```rust
+    // Validation
+    stage_times.add(Stage::Validate, start.elapsed());
+
+    // Read / chunking
+    stage_times.add(Stage::Read, start.elapsed());
+
+    // Encryption
+    stage_times.merge(&frame.stage_times);
+
+    // Digesting
+    stage_times.add(Stage::Digest, start.elapsed());
+
+    // Finalizing
+    stage_times.add(Stage::Validate, start.elapsed());
+
+    // Writing / wiring
+    stage_times.add(Stage::Write, start.elapsed());
+```
+
+### Decrypt
+
+```rust
+    // Validation
+    stage_times.add(Stage::Validate, start.elapsed());
+
+    // Read / chunking
+    stage_times.add(Stage::Read, start.elapsed());
+
+    // Decryption
+    stage_times.merge(&frame.stage_times);
+
+    // Digesting
+    stage_times.add(Stage::Digest, start.elapsed());
+
+    // Finalizing
+    stage_times.add(Stage::Validate, start.elapsed());
+
+    // Writing / wiring
+    stage_times.add(Stage::Write, start.elapsed());
+```
+
+### Encrypt (Counters)
+
+```rust
+    // One frame for each segment, the SegmentHeader
+    counters.frames_header += 1
+    // Calculate len of overhead bytes
+    counters.bytes_overhead += SegmentHeader::LEN
+    counters.add_header(SegmentHeader::LEN);
+
+    // Many frames for each segment data
+    counters.frames_data += 1
+    // Calculate len of data overhead, the FrameHeader
+    counters.bytes_overhead += FrameHeader::LEN as u64;
+    // Calculate len of ciphertext
+    counters.bytes_ciphertext += frame.ciphertext().len() as u64;
+
+    // One frame for each segment, the SegmentDigest of segment data
+    counters.frames_digest += 1
+    // Calculate len of overhead bytes
+    counters.bytes_overhead += digest_frame.ciphertext().len()
+    counters.add_digest(digest_frame.ciphertext().len());
+
+    // One frame for each segment, the SegmentTerminator
+    counters.frames_terminator += 1
+    // Calculate len of overhead bytes
+    counters.bytes_overhead += terminator_frame.ciphertext().len()
+    counters.add_terminator(terminator_frame.ciphertext().len());
+```
+
+### Decrypt (Counters)
+
+```rust
+    // One frame for each segment, the SegmentHeader
+    counters.frames_header += 1
+    // Calculate len of overhead bytes
+    counters.bytes_overhead += SegmentHeader::LEN
+    counters.add_header(SegmentHeader::LEN);
+
+    // Many frames for each segment data
+    counters.frames_data += 1
+    // Calculate len of data overhead, the FrameHeader
+    counters.bytes_overhead += FrameHeader::LEN as u64;
+    // Calculate len of plaintext (may be compressed)
+    counters.bytes_compressed += frame.plaintext.len() as u64;
+
+    // One frame for each segment, the SegmentDigest of segment data
+    counters.frames_digest += 1
+    // Calculate len of overhead bytes
+    counters.bytes_overhead += digest_frame_data.plaintext.len()
+    counters.add_digest(digest_frame_data.plaintext.len());
+
+    // One frame for each segment, the SegmentTerminator
+    counters.frames_terminator += 1
+    // Calculate len of overhead bytes
+    counters.bytes_overhead += terminator_frame_data.plaintext.len()
+    counters.add_terminator(terminator_frame_data.plaintext.len());
+```

@@ -49,7 +49,7 @@ pub fn derive_nonce_12_tls_style(
     let mut nonce = [0u8; NONCE_LEN_12];
     nonce.copy_from_slice(&salt[..NONCE_LEN_12]);
 
-    let ctr = frame_index.to_le_bytes();
+    let ctr: [u8; 8] = frame_index.to_le_bytes(); // always 8 bytes
     for j in 0..8 {
         nonce[4 + j] ^= ctr[j];
     }

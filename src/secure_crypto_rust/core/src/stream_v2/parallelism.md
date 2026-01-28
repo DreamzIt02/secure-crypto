@@ -114,7 +114,7 @@ pub struct HybridParallelismProfile {
 }
 
 impl HybridParallelismProfile {
-    pub fn dynamic(max_segment_size: u64, mem_fraction: f64, hard_cap: usize) -> Self {
+    pub fn dynamic(max_segment_size: u32, mem_fraction: f64, hard_cap: usize) -> Self {
         ...
     }
 }

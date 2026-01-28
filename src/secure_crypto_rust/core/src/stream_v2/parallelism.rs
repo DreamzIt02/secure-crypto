@@ -1,18 +1,19 @@
 
-fn detect_opencl_count() -> usize {
+pub const GPU_THRESHOLD: usize = 4 * 1024 * 1024; // 4 MB
 
-    let mut cl_count = 0;
-    let platforms = ocl::Platform::list(); // returns Vec<Platform>
-    for p in platforms {
-        // Device::list_all returns Result<Vec<Device>, OclError>
-        if let Ok(devices) = ocl::Device::list_all(p) {
-            cl_count += devices.len();
-        }
-    }
-    if cl_count > 0 {
-        eprintln!("[GPU DETECT] OpenCL devices found: {}", cl_count);
-    }
-    cl_count
+#[derive(Debug, Copy, Clone)]
+pub enum GpuBackend {
+    None,
+    Cuda,
+    Wgpu,
+    OpenCL,
+}
+
+#[derive(Debug, Clone)]
+pub struct GpuInfo {
+    pub count: usize,
+    pub backend: GpuBackend,
+    pub device_names: Vec<String>,
 }
 
 async fn detect_wgpu_count() -> usize {
@@ -25,114 +26,213 @@ async fn detect_wgpu_count() -> usize {
     0
 }
 
+// fn detect_opencl_count() -> usize {
 
-/// Return the number of GPU devices detected across CUDA, OpenCL, and wgpu backends.
-pub fn detect_gpu_count() -> usize {
+//     let mut cl_count = 0;
+//     let platforms = ocl::Platform::list(); // returns Vec<Platform>
+//     for p in platforms {
+//         // Device::list_all returns Result<Vec<Device>, OclError>
+//         if let Ok(devices) = ocl::Device::list_all(p) {
+//             cl_count += devices.len();
+//         }
+//     }
+//     if cl_count > 0 {
+//         eprintln!("[GPU DETECT] OpenCL devices found: {}", cl_count);
+//     }
+//     cl_count
+// }
+
+
+pub fn detect_gpu_info() -> GpuInfo {
     // CUDA
     #[cfg(feature = "cuda")]
     {
         if let Ok(count) = cust::device::Device::num_devices() {
             if count > 0 {
                 eprintln!("[GPU DETECT] CUDA devices found: {}", count);
-                return count as usize;
+                let names = (0..count)
+                    .filter_map(|i| cust::device::Device::get(i).ok())
+                    .map(|d| d.name().unwrap_or_else(|_| "Unknown CUDA device".into()))
+                    .collect();
+                return GpuInfo {
+                    count: count as usize,
+                    backend: GpuBackend::Cuda,
+                    device_names: names,
+                };
             }
         }
     }
-    
+
     // OpenCL
-    let cl_count = detect_opencl_count();
+    let mut names = Vec::new();
+    let cl_count = {
+        let mut cl_count = 0;
+        let platforms = ocl::Platform::list();
+        for p in platforms {
+            if let Ok(devices) = ocl::Device::list_all(p) {
+                cl_count += devices.len();
+                names.extend(devices.iter().map(|d| d.name().unwrap_or("Unknown OpenCL device".into())));
+            }
+        }
+        cl_count
+    };
     if cl_count > 0 {
-        return cl_count;
+        eprintln!("[GPU DETECT] OpenCL devices found: {}", cl_count);
+        return GpuInfo {
+            count: cl_count,
+            backend: GpuBackend::OpenCL,
+            device_names: names,
+        };
     }
 
     // Vulkan/Metal/DX via wgpu
-    let cl_count = pollster::block_on(detect_wgpu_count());
-    if cl_count > 0 {
-        return cl_count;
+    let adapters = pollster::block_on(detect_wgpu_count());
+    if adapters > 0 {
+        eprintln!("[GPU DETECT] wgpu adapters found: {}", adapters);
+        // wgpu::Adapter doesn’t expose names directly without async device creation,
+        // so we can leave names empty or fill with placeholders.
+        return GpuInfo {
+            count: adapters,
+            backend: GpuBackend::Wgpu,
+            device_names: Vec::new(),
+        };
     }
 
     eprintln!("[GPU DETECT] No GPU devices found");
-    0
+    GpuInfo {
+        count: 0,
+        backend: GpuBackend::None,
+        device_names: Vec::new(),
+    }
 }
+
+/// Return the number of GPU devices detected across CUDA, OpenCL, and wgpu backends.
+// pub fn detect_gpu_count() -> usize {
+//     // CUDA
+//     #[cfg(feature = "cuda")]
+//     {
+//         if let Ok(count) = cust::device::Device::num_devices() {
+//             if count > 0 {
+//                 eprintln!("[GPU DETECT] CUDA devices found: {}", count);
+//                 return count as usize;
+//             }
+//         }
+//     }
+    
+//     // Vulkan/Metal/DX via wgpu
+//     let cl_count = pollster::block_on(detect_wgpu_count());
+//     if cl_count > 0 {
+//         return cl_count;
+//     }
+
+//     // OpenCL
+//     let cl_count = detect_opencl_count();
+//     if cl_count > 0 {
+//         return cl_count;
+//     }
+
+//     eprintln!("[GPU DETECT] No GPU devices found");
+//     0
+// }
 
 /// Parallelism configuration
 #[derive(Debug, Clone)]
-pub struct ParallelismProfile {
-    pub worker_count: usize,
-    pub inflight_segments: usize,
-}
-
-impl ParallelismProfile {
-    pub fn single_threaded() -> Self {
-        Self {
-            worker_count: 1,
-            inflight_segments: 1,
-        }
-    }
-    pub fn dynamic(max_segment_size: u64, mem_fraction: f64, hard_cap: usize) -> Self {
-        let cores = num_cpus::get();
-        let worker_count = cores.saturating_sub(1); // leave one core free
-
-        let mut sys = sysinfo::System::new_all();
-        sys.refresh_memory();
-
-        let avail_mem_kb = sys.available_memory(); // in KB
-        let avail_bytes = avail_mem_kb * 1024;
-
-        // Budget = fraction of available memory
-        let budget = (avail_bytes as f64 * mem_fraction) as u64;
-
-        let max_segments = budget / max_segment_size;
-
-        Self {
-            worker_count,
-            inflight_segments: max_segments.min(hard_cap as u64) as usize,
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
 pub struct HybridParallelismProfile {
-    pub cpu_workers: usize,
-    pub gpu_workers: usize,
-    pub inflight_segments: usize,
+    cpu_workers: usize,
+    gpu_workers: usize,
+    inflight_segments: usize,
+    gpu_threshold: usize,
+    gpu: Option<GpuInfo>,
 }
 
 impl HybridParallelismProfile {
-    pub fn single_threaded() -> Self {
+    /// Controlled constructor
+    pub fn new(cpu_workers: usize, gpu_workers: usize, inflight_segments: usize) -> Self {
+        let gpu = detect_gpu_info();
+        // enforce sane limits
+        let cpu_workers = cpu_workers.clamp(1, num_cpus::get().saturating_sub(1));
+        let gpu_workers = gpu_workers.clamp(0, gpu.count); // arbitrary cap, adjust as needed
+        let inflight_segments = inflight_segments.clamp(1, 64);
+
         Self {
-            cpu_workers: 1,
-            gpu_workers: 1,
-            inflight_segments: 1,
+            cpu_workers,
+            gpu_workers,
+            inflight_segments,
+            gpu_threshold: GPU_THRESHOLD,
+            gpu: Some(gpu),
         }
     }
-    pub fn dynamic(max_segment_size: u64, mem_fraction: f64, hard_cap: usize) -> Self {
+
+    /// Read-only accessors
+    pub fn cpu_workers(&self) -> usize {
+        self.cpu_workers
+    }
+
+    pub fn gpu_workers(&self) -> usize {
+        self.gpu_workers
+    }
+
+    pub fn inflight_segments(&self) -> usize {
+        self.inflight_segments
+    }
+
+    pub fn gpu_threshold(&self) -> usize {
+        self.gpu_threshold
+    }
+
+    pub fn gpu(&self) -> Option<GpuInfo> {
+        self.gpu.clone()
+    }
+    
+    pub fn single_threaded() -> Self {
+        let gpu = detect_gpu_info();
+        Self {
+            cpu_workers: 1,
+            gpu_workers: 1.clamp(0, gpu.count),
+            inflight_segments: 1,
+            gpu_threshold: GPU_THRESHOLD,
+            gpu: Some(gpu),
+        }
+    }
+    // * On a machine with 16 cores and 16 GB free RAM:
+    // * `worker_count = 15`
+    // * `budget = 8 GB` (50% of 16 GB)
+    // * `max_segment_size = 32 MB`
+    // * `max_segments = 8192 MB / 32 MB = 256`
+    // * With `hard_cap = 64`, we get `inflight_segments = 64`.
+    pub fn dynamic(max_segment_size: u32, mem_fraction: f64, hard_cap: usize) -> Self {
         let cores = num_cpus::get();
         let cpu_workers = cores.saturating_sub(1);
 
         let mut sys = sysinfo::System::new_all();
         sys.refresh_memory();
         let avail_bytes = sys.available_memory() * 1024;
-        let budget = (avail_bytes as f64 * mem_fraction) as u64;
+        let budget = (avail_bytes as f64 * mem_fraction) as u32;
         let max_segments = budget / max_segment_size;
 
-        let gpu_workers = detect_gpu_count();
+        let gpu = detect_gpu_info();
+        let gpu_workers = gpu.count;
 
         eprintln!(
             "[PROFILE] cpu_workers={}, gpu_workers={}, inflight_segments={}",
             cpu_workers,
             gpu_workers,
-            max_segments.min(hard_cap as u64)
+            max_segments.min(hard_cap as u32)
         );
 
         Self {
             cpu_workers,
             gpu_workers,
-            inflight_segments: max_segments.min(hard_cap as u64) as usize,
+            inflight_segments: max_segments.min(hard_cap as u32) as usize,
+            gpu_threshold: GPU_THRESHOLD,
+            gpu: Some(gpu),
         }
     }
+
 }
 
+
+#[derive(Debug, Clone, PartialEq)]
 pub enum WorkerTarget {
     Cpu(usize), // index of CPU worker
     Gpu(usize), // index of GPU device
@@ -146,7 +246,7 @@ pub fn dispatch_segment(
     gpu_threshold: usize, // e.g. 8 MB
     cpu_load: &[usize],   // queue depth per CPU worker
     gpu_load: &[usize],   // queue depth per GPU device
-) -> WorkerTarget {
+) -> Option<WorkerTarget> {
     if gpu_workers > 0 && segment_size >= gpu_threshold {
         // Choose GPU with lowest load
         let (idx, _) = gpu_load
@@ -154,15 +254,19 @@ pub fn dispatch_segment(
             .enumerate()
             .min_by_key(|(_, load)| *load)
             .unwrap();
-        WorkerTarget::Gpu(idx)
-    } else {
+       Some(WorkerTarget::Gpu(idx))
+    } 
+    else if cpu_workers > 0 {
         // Choose CPU with lowest load
         let (idx, _) = cpu_load
             .iter()
             .enumerate()
             .min_by_key(|(_, load)| *load)
             .unwrap();
-        WorkerTarget::Cpu(idx)
+        Some(WorkerTarget::Cpu(idx))
+    }
+    else {
+        None
     }
 }
 

@@ -3,7 +3,7 @@ use crate::{
     compression::CompressionError, 
     crypto::{AadError, CryptoError, NonceError}, 
     headers::HeaderError, 
-    stream_v2::{framing::FrameError, segment_worker::SegmentWorkerError, segmenting::types::SegmentError}
+    stream_v2::{compression_worker::CompressionWorkerError, framing::FrameError, segment_worker::SegmentWorkerError, segmenting::types::SegmentError}
 };
 
 
@@ -23,6 +23,9 @@ pub enum StreamError {
 
     /// Segment-level error (validation or parse).
     SegmentWorker(SegmentWorkerError),
+
+    /// Segment-level error (validation or parse).
+    CompressionWorker(CompressionWorkerError),
 
     /// Segment-level error (validation or parse).
     Segment(SegmentError),
@@ -56,6 +59,7 @@ impl std::fmt::Display for StreamError {
             StreamError::Aad(e) => write!(f, "aad error: {}", e),
             StreamError::Header(e) => write!(f, "header error: {}", e),
             StreamError::SegmentWorker(e) => write!(f, "segment worker error: {}", e),
+            StreamError::CompressionWorker(e) => write!(f, "compression worker error: {}", e),
             StreamError::Segment(e) => write!(f, "segment error: {}", e),
             StreamError::Frame(e) => write!(f, "frame error: {}", e),
             StreamError::Crypto(e) => write!(f, "crypto error: {}", e),

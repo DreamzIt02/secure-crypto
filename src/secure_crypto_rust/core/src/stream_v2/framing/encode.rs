@@ -10,7 +10,7 @@ use crate::stream_v2::framing::types::{FrameHeader, FrameError};
 /// [ magic (4) ]
 /// [ version (1) ]
 /// [ frame_type (1) ]
-/// [ segment_index (8) ]
+/// [ segment_index (4) ]
 /// [ frame_index (4) ]
 /// [ plaintext_len (4) ]
 /// [ ciphertext_len (4) ]
@@ -36,7 +36,7 @@ pub fn encode_frame(
     wire.push(FRAME_VERSION);
     wire.push(header.frame_type.try_to_u8()?);
 
-    wire.write_u64::<LittleEndian>(header.segment_index).unwrap();
+    wire.write_u32::<LittleEndian>(header.segment_index).unwrap();
     wire.write_u32::<LittleEndian>(header.frame_index).unwrap();
     wire.write_u32::<LittleEndian>(header.plaintext_len).unwrap();
     // wire.write_u32::<LittleEndian>(header.compressed_len).unwrap();

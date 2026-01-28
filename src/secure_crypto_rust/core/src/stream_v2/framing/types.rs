@@ -68,7 +68,7 @@ impl FrameType {
 /// All fields are little-endian.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FrameHeader {
-    pub segment_index: u64,
+    pub segment_index: u32,
     pub frame_index: u32,
     pub frame_type: FrameType,
     /// Plaintext length in this frame (DATA only; last frame may be < chunk_size).
@@ -81,7 +81,7 @@ impl FrameHeader {
     pub const LEN: usize = 4  // magic
         + 1                  // version
         + 1                  // frame_type
-        + 8                  // segment_index
+        + 4                  // segment_index
         + 4                  // frame_index
         + 4                  // plaintext_len
         + 4;                 // ciphertext_len
@@ -100,7 +100,7 @@ impl FrameHeader {
 
     /// Canonical header for tests.
     /// Guaranteed to pass `validate()` unless a regression is introduced.
-    pub fn test_header(frame_type: FrameType, segment_index: u64) -> Self {
+    pub fn test_header(frame_type: FrameType, segment_index: u32) -> Self {
         Self {
             frame_type: frame_type,
             segment_index: segment_index,

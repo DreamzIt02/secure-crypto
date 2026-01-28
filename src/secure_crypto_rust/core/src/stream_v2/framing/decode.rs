@@ -29,8 +29,8 @@ pub fn parse_frame_header(wire: &[u8]) -> Result<FrameHeader, FrameError> {
     let frame_type = FrameType::try_from_u8(wire[off])?;
     off += 1;
 
-    let segment_index = LittleEndian::read_u64(&wire[off..off + 8]);
-    off += 8;
+    let segment_index = LittleEndian::read_u32(&wire[off..off + 4]);
+    off += 4;
 
     let frame_index = LittleEndian::read_u32(&wire[off..off + 4]);
     off += 4;

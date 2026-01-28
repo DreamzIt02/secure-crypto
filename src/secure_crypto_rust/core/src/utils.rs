@@ -1,7 +1,35 @@
 use std::fmt;
 use num_enum::TryFromPrimitive;
 
-use crate::constants::{ALLOWED_CHUNK_SIZES, ChunkPolicy, DEFAULT_CHUNK_SIZE, MAX_CHUNK_SIZE, RoundingBase};
+use crate::{constants::{ALLOWED_CHUNK_SIZES, ChunkPolicy, DEFAULT_CHUNK_SIZE, MAX_CHUNK_SIZE, RoundingBase}};
+
+#[repr(u16)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, TryFromPrimitive)]
+pub enum ChecksumAlg {
+    Crc32   = 0x0001,
+    Blake3   = 0x0201, // UN-KEYED Blake3
+}
+pub fn compute_checksum(data: &[u8], alg: Option<ChecksumAlg>) -> u32 {
+    match alg {
+        Some(ChecksumAlg::Crc32)  => compute_crc32(data),
+        // Some(ChecksumAlg::Blake3) => compute_blake3(data), // Its return 32-bytes
+        _                         => compute_crc32(data)
+    }
+}
+
+fn compute_crc32(data: &[u8]) -> u32 {
+    use crc32fast::Hasher;
+    let mut hasher = Hasher::new();
+    hasher.update(data);
+    hasher.finalize()
+}
+
+// fn compute_blake3(data: &[u8]) -> [u8; 32] {
+//     use blake3::Hasher;
+//     let mut hasher = Hasher::new();
+//     hasher.update(data);
+//     *hasher.finalize().as_bytes()
+// }
 
 pub fn enum_name_or_hex<T>(raw: T::Primitive) -> String
 where

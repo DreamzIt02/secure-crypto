@@ -18,7 +18,7 @@ mod tests {
 
     fn run_roundtrip(alg: DigestAlg) {
         // Sample segment data
-        let segment_index = 42u64;
+        let segment_index = 42u32;
         let frames = vec![
             (0u32, b"hello".to_vec()),
             (1u32, b"world".to_vec()),
@@ -88,7 +88,7 @@ mod tests {
 
     #[test]
     fn test_tampered_ciphertext_detected() {
-        let segment_index = 1u64;
+        let segment_index = 1u32;
         let frame_count = 1u32;
         let ciphertext = b"original".to_vec();
 
@@ -152,7 +152,7 @@ mod tests {
     proptest! {
         #[test]
         fn prop_digest_roundtrip_agreement(
-            segment_index in any::<u64>(),
+            segment_index in any::<u32>(),
             frame_count in 1u32..5, // small frame counts for fuzz
             frames in proptest::collection::vec(
                 proptest::collection::vec(any::<u8>(), 0..64), 1..5
@@ -194,7 +194,7 @@ mod tests {
     proptest! {
         #[test]
         fn prop_tampered_ciphertext_detected(
-            segment_index in any::<u64>(),
+            segment_index in any::<u32>(),
             ciphertext in proptest::collection::vec(any::<u8>(), 1..64)
         ) {
             let frame_count = 1u32;

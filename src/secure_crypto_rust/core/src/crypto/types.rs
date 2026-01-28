@@ -2,19 +2,8 @@
 // ## 📂 File: `src/crypto/types.rs`
 
 use std::fmt;
-use crate::headers::{HEADER_LEN_V1, enum_name_or_hex};
+use crate::headers::{HeaderV1, enum_name_or_hex};
 use crate::headers::{AadDomain, CipherSuite, HeaderError, HkdfPrf};
-
-/// Length of frame-level data authenticated in AAD (immutable fields only)
-///
-/// frame_type        : 1
-/// segment_index     : 8
-/// frame_index       : 4
-/// plaintext_len     : 4
-pub const FRAME_AAD_LEN: usize = 1 + 8 + 4 + 4;
-
-/// Total AAD length for V1
-pub const AAD_LEN_V1: usize = HEADER_LEN_V1 + FRAME_AAD_LEN;
 
 /// Stable key and nonce sizes.
 pub const KEY_LEN_32: usize = 32;
@@ -31,12 +20,21 @@ pub const TAG_LEN: usize = 16;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AadHeader {
     pub frame_type: u8,
-    pub segment_index: u64,
+    pub segment_index: u32,
     pub frame_index: u32,
     /// Plaintext length in this frame (DATA only; last frame may be < chunk_size).
     pub plaintext_len: u32,
 }
 
+impl AadHeader {
+    pub const FRAME_LEN: usize = 1 // frame_type  
+        + 4                  // segment_index
+        + 4                  // frame_index 
+        + 4;                 // plaintext_len
+        
+    pub const LEN_V1: usize = AadHeader::FRAME_LEN  // FRAME_LEN
+        + HeaderV1::LEN;                  // HeaderV1 len
+}
 #[derive(Debug)]
 pub enum AadError {
     /// Unknown or unsupported AAD domain.

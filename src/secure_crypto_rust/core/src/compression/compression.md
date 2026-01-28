@@ -153,3 +153,55 @@ compression/types.rs
      ↑
 compression (codecs, )
 ```
+
+---
+
+## 🔧 Utility function for hashing
+
+```rust
+pub fn compute_crc32(data: &[u8]) -> u32 {
+    use crc32fast::Hasher;
+    let mut hasher = Hasher::new();
+    hasher.update(data);
+    hasher.finalize()
+}
+
+pub fn compute_blake3(data: &[u8]) -> [u8; 32] {
+    use blake3::Hasher;
+    let mut hasher = Hasher::new();
+    hasher.update(data);
+    *hasher.finalize().as_bytes()
+}
+```
+
+---
+
+## ⚖️ CRC32 vs BLAKE3
+
+| Feature              | CRC32Fast                        | BLAKE3                           |
+|-----------------------|----------------------------------|----------------------------------|
+| **Speed**            | Extremely fast, hardware‑accelerated on most CPUs | Very fast, SIMD‑optimized, scales well with threads |
+| **Output size**      | 4 bytes (u32)                    | 32 bytes (default digest)        |
+| **Collision resistance** | Weak (good for accidental corruption, not adversarial tampering) | Strong cryptographic hash, resistant to collisions |
+| **Use case fit**     | Detect random bit flips, transmission/storage errors | Detect both corruption and malicious tampering |
+| **Overhead per segment** | Tiny (4 bytes per segment)    | Larger (32 bytes per segment)    |
+
+---
+
+## 📊 For our pipeline
+
+- **Segment size**: 64 KB up to 32 MB.  
+- **Integrity need**: If our goal is *corruption detection* (e.g. disk/network errors), CRC32 is sufficient and very lightweight.  
+- **Security need**: If we want to *prevent malicious tampering* (e.g. attacker modifies ciphertext), we should use a cryptographic hash like BLAKE3.  
+
+Since we already encrypt segments, encryption provides confidentiality but not integrity. If we want **authenticated encryption**, we’d normally use an AEAD cipher (like AES‑GCM or ChaCha20‑Poly1305) which already includes a MAC. In that case, CRC32 is redundant. If we’re not using AEAD, then adding BLAKE3 gives us strong integrity guarantees.
+
+---
+
+## 🏁 Recommendation
+
+- **If we only care about accidental corruption** → use `crc32fast`. It’s tiny, fast, and adds just 4 bytes per segment.  
+- **If we care about adversarial tampering** → use `blake3`. It’s cryptographically strong, but adds 32 bytes per segment.  
+- **If we plan to switch to AEAD encryption** → we don’t need either; the AEAD tag already covers integrity.  
+
+---

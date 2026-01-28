@@ -1,7 +1,7 @@
 use std::fmt;
-
 use bytes::Bytes;
-use crc32fast::Hasher;
+
+use crate::utils::{ChecksumAlg, compute_checksum};
 
 bitflags::bitflags! {
     /// ## 🚩 Segment flags (explicit, extensible)
@@ -22,25 +22,19 @@ bitflags::bitflags! {
 
     // > Using `bitflags` here is **intentional**:
     // > it prevents accidental semantic drift and gives us cheap validation.
-
 }
-
 
 /// Segmetn type identifiers for the envelope.
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SegmentHeader {
     /// Monotonic segment number starting at 0
-    pub segment_index: u64,
+    pub segment_index: u32,
 
-    /// Total plaintext bytes represented by this segment
-    // pub plaintext_len: u64, // Not required, this is exact slice of HeaderV1::chunk_size
+    /// Total plaintext (or maybe compressed) bytes represented by this segment before encrypt, and after decrypt
+    pub bytes_len: u32,
 
-    /// Total plaintext bytes represented by this segment
-    /// Calculate in caller after compress, before sending to the encrypt worker
-    pub compressed_len: u32,
-
-    /// Total encoded bytes following this header (frames only)
+    /// Total encrypted+encoded bytes following this header (frames only), and before decrypt
     pub wire_len: u32,
 
     /// Optional integrity check of the segment wire (0 if unused)
@@ -57,13 +51,11 @@ pub struct SegmentHeader {
 
     /// Reserved for future use; must be zero
     pub reserved: u16,
-
 }
 
-
 impl SegmentHeader {
-    pub const LEN: usize = 8  // segment_index
-        + 4                  // compressed_len
+    pub const LEN: usize = 4  // segment_index
+        + 4                  // bytes_len
         + 4                  // wire_len
         + 4                  // wire_crc32
         + 4                  // frame_count
@@ -81,8 +73,8 @@ impl SegmentHeader {
     /// Callers must NOT mutate fields afterward.
     pub fn new(
         wire: &Bytes,
-        segment_index: u64,
-        compressed_len: u32,
+        segment_index: u32,
+        bytes_len: u32,
         frame_count: u32,
         digest_alg: u16,
         flags: SegmentFlags,
@@ -95,15 +87,13 @@ impl SegmentHeader {
         );
 
         // --- CRC32 ---
-        let mut hasher = Hasher::new();
-        hasher.update(wire);
-        let crc = hasher.finalize();
-
+        let wire_crc32 = compute_checksum(wire, Some(ChecksumAlg::Crc32));
+        
         SegmentHeader {
             segment_index,
             wire_len: wire_len as u32,
-            compressed_len: compressed_len as u32,
-            wire_crc32: crc,
+            bytes_len: bytes_len as u32,
+            wire_crc32: wire_crc32,
             frame_count,
             digest_alg,
             flags: flags,
@@ -111,8 +101,32 @@ impl SegmentHeader {
         }
     }
 
-    
+    pub fn validate(&self, wire: &Bytes) -> Result<(), SegmentError> {
+        // --- CRC32 ---
+        let wire_crc32 = compute_checksum(wire, Some(ChecksumAlg::Crc32));
+
+        if self.wire_crc32 != wire_crc32 {
+            return Err(SegmentError::Malformed("Wire checksum failed".into()));
+        }
+        Ok(())
+    }
+    /// Produce a concise debug summary of the segment header
+    pub fn summary(&self) -> String {
+        format!(
+            "SegmentHeader {{ index: {}, bytes_len: {}, wire_len: {}, crc32: {}, \
+             frame_count: {}, digest_alg: {}, flags: {:?}, reserved: {} }}",
+            self.segment_index,
+            self.bytes_len,
+            self.wire_len,
+            self.wire_crc32,
+            self.frame_count,
+            self.digest_alg,
+            self.flags,
+            self.reserved,
+        )
+    }
 }
+
 
 #[derive(Debug, Clone, Copy)]
 pub struct SegmentView<'a> {

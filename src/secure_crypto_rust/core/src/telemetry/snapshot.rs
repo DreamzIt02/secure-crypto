@@ -6,7 +6,6 @@
 // //!
 // //! Design notes:
 // //! - `TelemetrySnapshot` is the core Rust struct with rich types (Duration, HashMap).
-// //! - `TelemetrySnapshot_C` is an FFI-safe mirror with only primitive fields.
 // //! - Stage times are flattened into fixed fields for ABI stability.
 // //! - Conversions ensure elapsed time is represented in milliseconds for cross-language parity.
 
@@ -32,10 +31,19 @@ pub struct TelemetrySnapshot {
     pub throughput_plaintext_bytes_per_sec: f64,
     pub elapsed: Duration,
     pub stage_times: StageTimes, // HashMap<Stage, Duration>
+    /// The final encrypted stream bytes, if the output sink was memory-backed.
+    /// 
+    /// - `None` if the output was written directly to a file or external sink.
+    /// - `Some(Vec<u8>)` if the pipeline wrote into an in-memory buffer.
+    /// 
+    /// This field is primarily useful in tests, benchmarks, or integrations
+    /// where we want to inspect the produced ciphertext alongside telemetry
+    /// counters and stage timings.
+    pub output: Option<Vec<u8>>,
 }
 
 impl TelemetrySnapshot {
-    pub fn from(counters: &TelemetryCounters, timer: &TelemetryTimer, segments: Option<u64>) -> Self {
+    pub fn from(counters: &TelemetryCounters, timer: &TelemetryTimer, segments: Option<u32>) -> Self {
         let elapsed = timer.elapsed();
 
         let mut compression_ratio = if counters.bytes_plaintext > 0 {
@@ -52,7 +60,7 @@ impl TelemetrySnapshot {
         };
 
         Self {
-            segments_processed: segments.unwrap_or_default(),
+            segments_processed: segments.unwrap_or_default() as u64,
             frames_data: counters.frames_data,
             frames_terminator: counters.frames_terminator,
             frames_digest: counters.frames_digest,
@@ -64,6 +72,7 @@ impl TelemetrySnapshot {
             throughput_plaintext_bytes_per_sec: throughput,
             elapsed: elapsed,
             stage_times: timer.stage_times.clone(),
+            output: None, // 🔧 initialize empty
         }
     }
 
@@ -71,13 +80,14 @@ impl TelemetrySnapshot {
         self.stage_times.iter().map(|(_, d)| *d).sum()
     }
 
-    // ### 🔧 Potential Enhancements
-
     // - **Stage coverage sanity**  
-    // Add a helper that asserts all expected `Stage` variants are present in `stage_times`. This prevents silent omissions when new stages are introduced.  
-
+    // Add a helper that asserts all expected `Stage` variants are present in `stage_times`. 
+    // This prevents silent omissions when new stages are introduced.  
     pub fn has_all_stages(&self, expected: &[Stage]) -> bool {
         expected.iter().all(|s| self.stage_times.get(*s) > Duration::ZERO)
+        // expected.iter().all(|s| {
+        //     self.stage_times.get(s).map_or(false, |d| *d > Duration::ZERO)
+        // })
     }
 
     // - **Consistency checks**  
@@ -94,6 +104,11 @@ impl TelemetrySnapshot {
     
     pub fn output_bytes(&self) -> u64 {
         self.bytes_ciphertext
+    }
+
+    /// 🔧 Attach output buffer to snapshot
+    pub fn attach_output(&mut self, buf: Vec<u8>) {
+        self.output = Some(buf);
     }
 }
 
