@@ -1,8 +1,10 @@
 #[cfg(test)]
 mod tests {
+    use std::sync::{Arc, atomic::AtomicBool};
+
     use bytes::Bytes;
     use crossbeam::channel::{self, bounded};
-    use crypto_core::{crypto::DigestAlg, stream_v2::{frame_worker::{EncryptedFrame, FrameInput, FrameWorkerError}, segment_worker::{EncryptSegmentInput, encrypt::process_encrypt_segment_2}, segmenting::types::SegmentFlags}, telemetry::{StageTimes, TelemetryCounters}};
+    use crypto_core::{crypto::DigestAlg, stream_v2::{frame_worker::{EncryptedFrame, FrameInput, FrameWorkerError}, segment_worker::{EncryptSegmentInput, encrypt::process_encrypt_segment_1}, segmenting::types::SegmentFlags}, telemetry::{StageTimes, TelemetryCounters}};
 
     fn setup_channels() -> (
         channel::Sender<FrameInput>,
@@ -40,8 +42,9 @@ mod tests {
             flags: SegmentFlags::FINAL_SEGMENT,
             stage_times: StageTimes::default(),
         };
+        let cancelled = Arc::new(AtomicBool::new(false));
 
-        let result = process_encrypt_segment_2(&input, 16, DigestAlg::Sha256, &frame_tx, &out_rx)
+        let result = process_encrypt_segment_1(&input, 16, DigestAlg::Sha256, &frame_tx, &out_rx, cancelled)
             .expect("should succeed");
 
         // Empty final segment should have all counters = 0
@@ -57,8 +60,9 @@ mod tests {
             flags: SegmentFlags::empty(),
             stage_times: StageTimes::default(),
         };
+        let cancelled = Arc::new(AtomicBool::new(false));
 
-        let result = process_encrypt_segment_2(&input, 16, DigestAlg::Sha256, &frame_tx, &out_rx)
+        let result = process_encrypt_segment_1(&input, 16, DigestAlg::Sha256, &frame_tx, &out_rx, cancelled)
             .expect("should succeed");
 
         let counters = result.counters;
@@ -87,8 +91,9 @@ mod tests {
             flags: SegmentFlags::empty(),
             stage_times: StageTimes::default(),
         };
+        let cancelled = Arc::new(AtomicBool::new(false));
 
-        let result = process_encrypt_segment_2(&input, 16, DigestAlg::Sha256, &frame_tx, &out_rx)
+        let result = process_encrypt_segment_1(&input, 16, DigestAlg::Sha256, &frame_tx, &out_rx, cancelled)
             .expect("should succeed");
 
         let counters = result.counters;

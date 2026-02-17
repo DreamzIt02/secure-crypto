@@ -1,7 +1,11 @@
 {
     "cSpell.words": [
         "Backpressure",
+        "bitflags",
+        "bitflip",
         "Bitmask",
+        "byteorder",
+        "Chacha",
         "ciphertext",
         "ciphertexts",
         "cpus",
@@ -12,12 +16,17 @@
         "eprintln",
         "HKDF",
         "maturin",
+        "opencl",
+        "println",
         "pyfunction",
         "pymodule",
         "pytest",
         "QUIC",
+        "repr",
+        "sched",
         "sysinfo",
         "usize",
+        "Wgpu",
         "Zstd"
     ],
     "rust-analyzer.linkedProjects": [

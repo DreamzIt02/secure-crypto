@@ -75,7 +75,7 @@ mod tests {
         let master_key = dummy_master_key();
         let header = dummy_header();
         let params = EncryptParams { header: header.clone(), dict: None };
-        let config = ApiConfig::new(Some(true), None);
+        let config = ApiConfig::new(Some(true), None, None, None );
 
         let plaintext = vec![0x55u8; 1024];
         let input = InputSource::Memory(plaintext.clone());
@@ -122,7 +122,7 @@ mod tests {
         let master_key = dummy_master_key();
         let header = dummy_header();
         let params = EncryptParams { header: header.clone(), dict: None };
-        let config = ApiConfig::new(Some(true), None);
+        let config = ApiConfig::new(Some(true), None, None, None );
 
         let plaintext = vec![0x55u8; 1024]; // 1 KiB of data
         let input = InputSource::Memory(plaintext.clone());
@@ -148,7 +148,7 @@ mod tests {
         let bad_key = vec![0x33u8; 15]; // invalid length
         let header = dummy_header();
         let params = EncryptParams { header, dict: None };
-        let config = ApiConfig::new(Some(true), None);
+        let config = ApiConfig::new(Some(false), None, None, None );
 
         let plaintext = vec![0x44u8; 512];
         let input = InputSource::Memory(plaintext);
@@ -163,9 +163,58 @@ mod tests {
         let bad_key = vec![0x33u8; 16]; // invalid length
         let input = InputSource::Memory(vec![0x99u8; 128]);
         let output = OutputSink::Memory;
-        let config = ApiConfig::new(Some(true), None);
+        let config = ApiConfig::new(Some(false), None, None, None );
 
         let result = decrypt_stream_v2(input, output, &bad_key, DecryptParams, config);
         assert!(result.is_err(), "Expected decryption to fail with invalid key");
     }
+
+    #[test]
+    fn encrypt_decrypt_stream_matches_snapshot_buf() {
+        let plaintext = vec![0xCD; 256 * 1024]; // 256 KB payload
+
+        let master_key = dummy_master_key();
+        let header = dummy_header();
+        let enc_params = EncryptParams { header, dict: None };
+        let dec_params = DecryptParams { };
+
+        let config = ApiConfig::new(Some(true), None, None, None); // with_buf = true
+
+        // Run encryption
+        let reader = std::io::Cursor::new(plaintext.clone());
+        let enc_snapshot = encrypt_stream_v2(
+            InputSource::Reader(Box::new(reader)),
+            OutputSink::Memory, // use buffer sink
+            &master_key,
+            enc_params,
+            config.clone(),
+        )
+        .expect("encryption failed");
+
+        // The snapshot now contains the encrypted output buffer
+        let encrypted_buf = enc_snapshot.output.clone().expect("missing output buffer");
+
+        // Run decryption on that buffer
+        let reader = std::io::Cursor::new(encrypted_buf.clone());
+        let dec_snapshot = decrypt_stream_v2(
+            InputSource::Reader(Box::new(reader)),
+            OutputSink::Memory,
+            &master_key,
+            dec_params,
+            config.clone(),
+        )
+        .expect("decryption failed");
+
+        // The snapshot now contains the decrypted output buffer
+        let decrypted_buf = dec_snapshot.output.clone().expect("missing output buffer");
+
+        // Compare decrypted buffer against original plaintext
+        assert_eq!(decrypted_buf, plaintext);
+
+        // Also verify telemetry counters are consistent
+        assert!(dec_snapshot.frames_data == 4); // Each 64KB
+        assert_eq!(dec_snapshot.frames_digest, 4);
+        assert_eq!(dec_snapshot.frames_terminator, 4);
+    }
+
 }

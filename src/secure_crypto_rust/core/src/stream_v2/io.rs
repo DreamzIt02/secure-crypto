@@ -70,7 +70,7 @@ pub struct SharedBufferWriter {
 impl Write for SharedBufferWriter {
     fn write(&mut self, data: &[u8]) -> std::io::Result<usize> {
         let mut guard = self.buf.lock().unwrap();
-        guard.extend_from_slice(data);
+        guard.extend_from_slice(data); // ✅ append, not overwrite
         Ok(data.len())
     }
 
@@ -166,37 +166,23 @@ pub fn read_exact_or_eof<R: Read>(
     buf.truncate(off);
     Ok(Bytes::from(buf))
 }
-// pub fn read_exact_or_eof_1<R: Read>(
-//     r: &mut R,
-//     len: usize,
-// ) -> Result<Bytes, StreamError> {
-//     let mut buf = vec![0u8; len];
-//     let n = r.read(&mut buf)?;
-//     if n == 0 {
-//         // EOF
-//         return Ok(Bytes::new());
-//     }
-//     buf.truncate(n);
-//     Ok(Bytes::from(buf))
-// }
+pub fn read_exact_or_eof_1<R: Read>(
+    r: &mut R,
+    len: usize,
+) -> Result<Bytes, StreamError> {
+    let mut buf = vec![0u8; len];
+    let n = r.read(&mut buf)?;
+    if n == 0 {
+        // EOF
+        return Ok(Bytes::new());
+    }
+    
+    buf.truncate(n);
+    Ok(Bytes::from(buf))
+}
 
 // ================= Segment I/O =================
 
-// pub fn read_segment<R: Read>(
-//     r: &mut R,
-// ) -> Result<Option<(SegmentHeader, Bytes)>, StreamError> {
-//     let mut hdr_buf = [0u8; SegmentHeader::LEN];
-
-//     if r.read_exact(&mut hdr_buf).is_err() {
-//         return Ok(None);
-//     }
-
-//     let header = decode_segment_header(&hdr_buf).map_err(|e| StreamError::Segment(e))?;
-//     let mut wire = vec![0u8; header.wire_len as usize];
-//     r.read_exact(&mut wire)?;
-
-//     Ok(Some((header, Bytes::from(wire))))
-// }
 pub fn read_segment<R: Read>(
     r: &mut R,
 ) -> Result<Option<(SegmentHeader, Bytes)>, StreamError> {
@@ -212,8 +198,8 @@ pub fn read_segment<R: Read>(
     // eprintln!("[IO:DECRYPT] Parsed header: {}", header.summary());
 
     // Allocate wire buffer according to header
-    let mut wire = vec![0u8; header.wire_len as usize];
-    if header.wire_len > 0 {
+    let mut wire = vec![0u8; header.wire_len() as usize];
+    if header.wire_len() > 0 {
         r.read_exact(&mut wire)?;
     }
 
@@ -272,12 +258,12 @@ impl<'a, W: Write> OrderedEncryptedWriter<'a, W> {
 
     pub fn push(&mut self, segment: EncryptedSegment) -> Result<(), StreamError> {
         // Accept empty wire if FINAL_SEGMENT is set
-        if segment.header.flags.contains(SegmentFlags::FINAL_SEGMENT) && segment.wire.is_empty() {
-            eprintln!("[ENCRYPT WRITER] Final empty segment {} detected", segment.header.segment_index);
-            self.final_index = Some(segment.header.segment_index);
+        if segment.header.flags().contains(SegmentFlags::FINAL_SEGMENT) && segment.wire.is_empty() {
+            eprintln!("[ENCRYPT WRITER] Final empty segment {} detected", segment.header.segment_index());
+            self.final_index = Some(segment.header.segment_index());
         }
         // Don’t write immediately — enqueue it
-        self.pending.insert(segment.header.segment_index, segment);
+        self.pending.insert(segment.header.segment_index(), segment);
         self.flush_ready()
     }
 
@@ -305,8 +291,10 @@ impl<'a, W: Write> OrderedEncryptedWriter<'a, W> {
     }
 
     fn write(&mut self, segment: EncryptedSegment) -> Result<(), StreamError> {
-        let segment_enc = encode_segment(&segment.header, &segment.wire).map_err(|e| StreamError::Segment(e))?;
-            eprintln!("[ENCRYPT WRITER] Final writing segment {}", segment.header.segment_index);
+        eprintln!("[ENCRYPT WRITER] Final writing segment {}", segment.header.segment_index());
+        let segment_enc = encode_segment(&segment.header, &segment.wire)
+            .map_err(|e| StreamError::Segment(e))?;
+        eprintln!("[ENCRYPT WRITER] Final encoded segment {} bytes: {}", segment_enc.len(), segment.header.summary());
         self.out.write_all(&segment_enc)?;
         Ok(())
     }
@@ -330,16 +318,16 @@ impl<'a, W: Write> OrderedPlaintextWriter<'a, W> {
     }
     pub fn push(&mut self, segment: &DecryptedSegment) -> Result<(), StreamError> {
         // Accept empty wire if FINAL_SEGMENT is set
-        if segment.header.flags.contains(SegmentFlags::FINAL_SEGMENT) && segment.bytes.is_empty() {
-            eprintln!("[PLAINTEXT WRITER] Final empty segment {} detected", segment.header.segment_index);
-            self.final_index = Some(segment.header.segment_index);
+        if segment.header.flags().contains(SegmentFlags::FINAL_SEGMENT) && segment.bytes.is_empty() {
+            eprintln!("[PLAINTEXT WRITER] Final empty segment {} detected", segment.header.segment_index());
+            self.final_index = Some(segment.header.segment_index());
 
             // Enqueue the final marker like any other segment
         }
 
         // Normal push logic
-        eprintln!("[PLAINTEXT WRITER] Queuing segment {}", segment.header.segment_index);
-        self.pending.insert(segment.header.segment_index, segment.clone());
+        eprintln!("[PLAINTEXT WRITER] Queuing segment {}", segment.header.segment_index());
+        self.pending.insert(segment.header.segment_index(), segment.clone());
         self.flush_ready()
     }
 
@@ -368,7 +356,7 @@ impl<'a, W: Write> OrderedPlaintextWriter<'a, W> {
     }
 
     fn write(&mut self, segment: DecryptedSegment) -> Result<(), StreamError> {
-        eprintln!("[PLAINTEXT WRITER] Writing segment {}", segment.header.segment_index);
+        eprintln!("[PLAINTEXT WRITER] Writing segment {}", segment.header.segment_index());
         self.out.write_all(&segment.bytes)?;
         Ok(())
     }

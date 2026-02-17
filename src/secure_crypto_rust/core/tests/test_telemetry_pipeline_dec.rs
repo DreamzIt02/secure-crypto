@@ -48,13 +48,13 @@ mod telemetry_decrypt_tests {
         // First encrypt to produce ciphertext
         let mut enc_reader = PayloadReader::new(Cursor::new(data.to_vec()));
         let mut enc_writer = Cursor::new(Vec::new());
-        let (mut enc_ctx, enc_profile, log_manager) = setup_enc_context(DigestAlg::Blake3);
+        let (enc_ctx, enc_profile, log_manager) = setup_enc_context(DigestAlg::Blake3);
         let config_pipe = PipelineConfig::new(enc_profile.clone(), None);
 
         let _ = run_encrypt_pipeline(
             &mut enc_reader,
             &mut enc_writer,
-            &mut enc_ctx,
+            Arc::new(enc_ctx),
             &config_pipe,
             log_manager.clone(),
         ).expect("encryption pipeline should succeed");
@@ -70,13 +70,13 @@ mod telemetry_decrypt_tests {
         // Now decrypt the ciphertext
         let mut dec_reader = PayloadReader::new(reader);
         let mut dec_writer = Cursor::new(Vec::new());
-        let (mut dec_ctx, dec_profile, log_manager) = setup_dec_context(DigestAlg::Blake3, &stream_header);
+        let (dec_ctx, dec_profile, log_manager) = setup_dec_context(DigestAlg::Blake3, &stream_header);
         let config_pipe = PipelineConfig::new(dec_profile.clone(), None);
 
         run_decrypt_pipeline(
             &mut dec_reader,
             &mut dec_writer,
-            &mut dec_ctx,
+            Arc::new(dec_ctx),
             &config_pipe,
             log_manager,
         ).expect("decryption pipeline should succeed")
@@ -85,13 +85,13 @@ mod telemetry_decrypt_tests {
     fn run_pipeline_with_data(data: &[u8]) -> (TelemetrySnapshot, Vec<u8>) {
         let mut reader = PayloadReader::new(Cursor::new(data.to_vec()));
         let mut writer = Cursor::new(Vec::new());
-        let (mut crypto, profile, log_manager) = setup_enc_context(DigestAlg::Blake3);
+        let (enc_ctx, profile, log_manager) = setup_enc_context(DigestAlg::Blake3);
         let config_pipe = PipelineConfig::new(profile.clone(), None);
 
         let snapshot = run_encrypt_pipeline(
             &mut reader,
             &mut writer,
-            &mut crypto,
+            Arc::new(enc_ctx),
             &config_pipe,
             log_manager,
         ).expect("encrypt pipeline should succeed");
@@ -111,13 +111,13 @@ mod telemetry_decrypt_tests {
         eprintln!("[TEST] Parsed stream header: {:?}", stream_header);
 
         let mut writer = Cursor::new(Vec::new());
-        let (mut dec_ctx, profile, log_manager) = setup_dec_context(DigestAlg::Blake3, &stream_header);
+        let (dec_ctx, profile, log_manager) = setup_dec_context(DigestAlg::Blake3, &stream_header);
         let config_pipe = PipelineConfig::new(profile.clone(), None);
 
         run_decrypt_pipeline(
             &mut reader,          // reader now positioned after HeaderV1
             &mut writer,
-            &mut dec_ctx,
+            Arc::new(dec_ctx),
             &config_pipe,
             log_manager,
         ).expect("decrypt pipeline should succeed")
@@ -130,8 +130,8 @@ mod telemetry_decrypt_tests {
 
         let snapshot = run_decrypt_with_ciphertext(ciphertext);
 
-        // Expect at least 2 segments: one data + one final empty
-        assert!(snapshot.segments_processed >= 2);
+        // Expect at least 1 segments: one data
+        assert!(snapshot.segments_processed >= 1);
     }
 
     #[test]
@@ -170,7 +170,7 @@ mod telemetry_decrypt_tests {
         let data = b"segment test data";
         let snapshot = run_decrypt_with_data(data);
 
-        assert!(snapshot.segments_processed >= 2); // one data + final empty segment
+        assert!(snapshot.segments_processed >= 1); // one data segment
     }
 
     #[test]
@@ -197,13 +197,13 @@ mod telemetry_decrypt_tests {
         let bad_ciphertext = vec![0xde, 0xad, 0xbe, 0xef];
         let mut reader = PayloadReader::new(Cursor::new(bad_ciphertext));
         let mut writer = Cursor::new(Vec::new());
-        let (mut dec_ctx, profile, log_manager) = setup_dec_context(DigestAlg::Blake3, &HeaderV1::test_header());
+        let (dec_ctx, profile, log_manager) = setup_dec_context(DigestAlg::Blake3, &HeaderV1::test_header());
         let config_pipe = PipelineConfig::new(profile.clone(), None);
 
         let result = run_decrypt_pipeline(
             &mut reader,
             &mut writer,
-            &mut dec_ctx,
+            Arc::new(dec_ctx),
             &config_pipe,
             log_manager,
         );

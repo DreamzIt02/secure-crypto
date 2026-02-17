@@ -85,52 +85,6 @@ pub struct DecryptedSegment {
     pub stage_times: StageTimes,
 }
 
-/// Immutable crypto context shared across workers
-// #[derive(Debug, Clone)]
-// pub struct SegmentCryptoContext {
-//     pub header: HeaderV1,
-//     pub profile: HybridParallelismProfile,
-//     pub session_key: [u8; KEY_LEN_32],
-//     pub digest_alg: DigestAlg,
-//     pub segment_size: usize,  // Our "chunk_size" from header: HeaderV1,
-//     pub frame_size: usize,    // Calculated
-// }
-
-// impl SegmentCryptoContext {
-//     pub fn new(
-//         header: HeaderV1,
-//         profile: HybridParallelismProfile,
-//         session_key: &[u8],
-//         digest_alg: DigestAlg,
-//         // segment_size: usize,  // Our "chunk_size" from header: HeaderV1,
-//         // frame_size: Option<usize>, // None = auto-calculate
-//     ) -> Result<Self, SegmentWorkerError> {
-//         //
-//         // Validate segment size in HeaderV1
-//         let segment_size = header.chunk_size as usize;
-
-//         if session_key.len() != KEY_LEN_32 {
-//             return Err(SegmentWorkerError::CryptoError(CryptoError::InvalidKeyLen { expected: KEY_LEN_32, actual: session_key.len() }));
-//         }
-
-//         let mut arr = [0u8; KEY_LEN_32];
-//         arr.copy_from_slice(session_key);
-
-//         // Auto-calculate optimal frame size
-//         // Calculate or validate frame size
-//         let frame_size = get_frame_size(segment_size);
-        
-//         Ok(Self {
-//             header: header,
-//             profile,
-//             session_key: arr,
-//             digest_alg,
-//             segment_size,
-//             frame_size,
-//         })
-//     }
-// }
-
 #[derive(Debug, Clone)]
 pub struct CryptoContextBase {
     pub profile: HybridParallelismProfile,
@@ -207,7 +161,7 @@ impl DecryptContext {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum SegmentWorkerError {
     StateError(String),
     InvalidSegment(String),
@@ -215,6 +169,7 @@ pub enum SegmentWorkerError {
     CheckpointRestoreFailed(String),
     MissingDigestFrame,
     MissingTerminatorFrame,
+    WorkerDisconnected,
 
     FrameWorkerError(FrameWorkerError),
     SegmentError(SegmentError),
@@ -264,6 +219,7 @@ impl fmt::Display for SegmentWorkerError {
             SegmentWorkerError::CheckpointRestoreFailed(msg) => write!(f, "checkpoint restore failed: {}", msg),
             SegmentWorkerError::MissingDigestFrame => write!(f, "invalid segment: {}", "Missing mandatory digest frame"),
             SegmentWorkerError::MissingTerminatorFrame => write!(f, "invalid segment: {}", "Missing mandatory terminator frame"),
+            SegmentWorkerError::WorkerDisconnected => write!(f, "fatal error: {}", "Segment worker disconnected unexpectedly"),
 
             SegmentWorkerError::FrameWorkerError(e) => write!(f, "frame worker error: {}", e),
             SegmentWorkerError::SegmentError(e) => write!(f, "segment error: {}", e),
@@ -297,27 +253,27 @@ impl From<CryptoError> for SegmentWorkerError {
     }
 }
 
-
 /// Calculate optimal frame size for a given segment size
 pub fn optimal_frame_size(segment_size: usize) -> usize {
+    const MIN_FRAMES_PER_SEGMENT: usize = 4; // Minimum parallelization
+    const _MAX_FRAMES_PER_SEGMENT: usize = 64;
 
-    const MIN_FRAMES_PER_SEGMENT: usize = 4;  // Minimum parallelization
-    const _MAX_FRAMES_PER_SEGMENT: usize = 64; // Don't over-fragment
-    
     // Calculate frame size to get reasonable frame count
-    let ideal_frame_size = segment_size / 16; // Target ~16 frames
-    
+    let mut frame_size = segment_size / 16; // target ~16 frames
+
     // Clamp to allowed range
-    let frame_size = ideal_frame_size
+    frame_size = frame_size
         .max(MIN_FRAME_SIZE)
         .min(MAX_FRAME_SIZE);
-    
+
+    // recompute frame count with ceiling
+    let frames_per_segment = (segment_size + frame_size - 1) / frame_size;
+
     // Ensure we get at least MIN_FRAMES_PER_SEGMENT
-    let frames_per_segment = segment_size / frame_size;
     if frames_per_segment < MIN_FRAMES_PER_SEGMENT {
-        return segment_size / MIN_FRAMES_PER_SEGMENT;
+        return (segment_size + MIN_FRAMES_PER_SEGMENT - 1) / MIN_FRAMES_PER_SEGMENT;
     }
-    
+
     frame_size
 }
 

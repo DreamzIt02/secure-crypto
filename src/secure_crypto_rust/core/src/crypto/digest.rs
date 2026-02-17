@@ -9,7 +9,7 @@ use blake3;
 use crate::utils::enum_name_or_hex;
 
 /// Digest-related errors.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum DigestError {
     UnknownAlgorithm { raw: u16 },
     DigestMismatch,

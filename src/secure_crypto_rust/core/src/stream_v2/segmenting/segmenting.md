@@ -49,35 +49,32 @@ These are **high ROI** fields — not bloat.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SegmentHeader {
     /// Monotonic segment number starting at 0
-    pub segment_index: u32,
+    segment_index: u32,
 
     /// Total plaintext (or maybe compressed) bytes represented by this segment before encrypt, and after decrypt
-    pub bytes_len: u32,
+    bytes_len: u32,
 
     /// Total encrypted+encoded bytes following this header (frames only), and before decrypt
-    pub wire_len: u32,
-
-    /// Total encoded bytes following this header (frames only)
-    pub wire_len: u32,
+    wire_len: u32,
 
     /// Optional integrity check of the segment wire (0 if unused)
-    pub wire_crc32: u32,
+    wire_crc32: u32,
 
     /// Number of frames in this segment (data + digest + terminator)
-    pub frame_count: u32,
+    frame_count: u32,
 
     /// Digest algorithm used (binds verifier)
-    pub digest_alg: u16,
+    digest_alg: u16,
 
     /// Segment-level flags (LAST, CHECKPOINT, etc.)
-    pub flags: u16,
+    flags: SegmentFlags, // ✅ NOT u16
 
-    /// Reserved for future use; must be zero
-    pub reserved: u16,
-
+    /// CRC32 of the entire SegmentHeader (all fields above, including wire_len and wire_crc32) 
+    header_crc32: u32,
 }
 
 impl SegmentHeader {
+    /// Total serialized length of the header in bytes (28)
     pub const LEN: usize = 4  // segment_index
         + 4                  // bytes_len
         + 4                  // wire_len
@@ -85,7 +82,7 @@ impl SegmentHeader {
         + 4                  // frame_count
         + 2                  // digest_alg
         + 2                  // flags
-        + 2;                 // reserved
+        + 4;                 // header_crc32
 }
 ```
 

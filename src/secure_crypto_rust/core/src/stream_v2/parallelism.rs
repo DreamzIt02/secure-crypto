@@ -1,3 +1,4 @@
+use crate::{headers::{HeaderV1, Strategy}, types::StreamError};
 
 pub const GPU_THRESHOLD: usize = 4 * 1024 * 1024; // 4 MB
 
@@ -25,23 +26,6 @@ async fn detect_wgpu_count() -> usize {
     }
     0
 }
-
-// fn detect_opencl_count() -> usize {
-
-//     let mut cl_count = 0;
-//     let platforms = ocl::Platform::list(); // returns Vec<Platform>
-//     for p in platforms {
-//         // Device::list_all returns Result<Vec<Device>, OclError>
-//         if let Ok(devices) = ocl::Device::list_all(p) {
-//             cl_count += devices.len();
-//         }
-//     }
-//     if cl_count > 0 {
-//         eprintln!("[GPU DETECT] OpenCL devices found: {}", cl_count);
-//     }
-//     cl_count
-// }
-
 
 pub fn detect_gpu_info() -> GpuInfo {
     // CUDA
@@ -137,6 +121,36 @@ pub fn detect_gpu_info() -> GpuInfo {
 
 /// Parallelism configuration
 #[derive(Debug, Clone)]
+pub struct ParallelismConfig {
+    cpu_workers: usize, 
+    gpu_workers: usize, 
+    mem_fraction: f64, 
+    hard_cap: usize,
+}
+
+impl Default for ParallelismConfig {
+    fn default() -> Self {
+        Self {
+            cpu_workers: 1,
+            gpu_workers: 0, 
+            mem_fraction: 0.2, // 20% of free memory 
+            hard_cap: 4, // Max in-flights segments limit on dynamic
+        }
+    }
+}
+impl ParallelismConfig {
+    pub fn new(cpu_workers: usize, gpu_workers: usize, mem_fraction: f64, hard_cap: usize) -> Self {
+        Self {
+            cpu_workers,
+            gpu_workers,
+            mem_fraction,
+            hard_cap,
+        }
+    }
+}
+
+/// Parallelism configuration
+#[derive(Debug, Clone)]
 pub struct HybridParallelismProfile {
     cpu_workers: usize,
     gpu_workers: usize,
@@ -147,12 +161,12 @@ pub struct HybridParallelismProfile {
 
 impl HybridParallelismProfile {
     /// Controlled constructor
-    pub fn new(cpu_workers: usize, gpu_workers: usize, inflight_segments: usize) -> Self {
+    fn new(cpu_workers: usize, gpu_workers: usize, hard_cap: usize) -> Self {
         let gpu = detect_gpu_info();
         // enforce sane limits
         let cpu_workers = cpu_workers.clamp(1, num_cpus::get().saturating_sub(1));
         let gpu_workers = gpu_workers.clamp(0, gpu.count); // arbitrary cap, adjust as needed
-        let inflight_segments = inflight_segments.clamp(1, 64);
+        let inflight_segments = hard_cap.clamp(1, 64); // default 64
 
         Self {
             cpu_workers,
@@ -161,6 +175,29 @@ impl HybridParallelismProfile {
             gpu_threshold: GPU_THRESHOLD,
             gpu: Some(gpu),
         }
+    }
+
+    pub fn with_strategy(
+        strategy: Strategy,
+        max_segment_size: u32,
+        config: Option<ParallelismConfig>,
+    ) -> Result<Self, StreamError> {
+        let opts = config.unwrap_or_default();
+        match strategy {
+            Strategy::Sequential => Ok(Self::single_threaded()),
+            Strategy::Parallel => Ok(Self::new(opts.cpu_workers, opts.gpu_workers, opts.hard_cap)),
+            Strategy::Auto => Ok(Self::dynamic(max_segment_size, opts.mem_fraction, opts.hard_cap)),
+        }
+    }
+
+    pub fn from_stream_header(
+        header: HeaderV1,
+        config: Option<ParallelismConfig>,
+    ) -> Result<Self, StreamError> {
+        let max_segment_size = header.chunk_size;
+        let strategy = Strategy::from(header.strategy).map_err(StreamError::Header)?;
+
+        Self::with_strategy(strategy, max_segment_size, config)
     }
 
     /// Read-only accessors

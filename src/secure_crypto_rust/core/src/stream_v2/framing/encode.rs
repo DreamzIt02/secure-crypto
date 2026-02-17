@@ -2,6 +2,7 @@ use byteorder::{LittleEndian, WriteBytesExt};
 
 use crate::stream_v2::framing::types::{FRAME_VERSION, FRAME_MAGIC};
 use crate::stream_v2::framing::types::{FrameHeader, FrameError};
+
 /// Encode a frame record into canonical wire format.
 ///
 /// Layout:
@@ -20,9 +21,9 @@ pub fn encode_frame(
     header: &FrameHeader,
     ciphertext: &[u8],
 ) -> Result<Vec<u8>, FrameError> {
-    let expected = FrameHeader::LEN + header.ciphertext_len as usize;
+    let expected = FrameHeader::LEN + header.ciphertext_len() as usize;
 
-    if ciphertext.len() != header.ciphertext_len as usize {
+    if ciphertext.len() != header.ciphertext_len() as usize {
         return Err(FrameError::LengthMismatch {
             expected,
             actual: ciphertext.len(),
@@ -34,13 +35,12 @@ pub fn encode_frame(
     // --- Header ---
     wire.extend_from_slice(&FRAME_MAGIC);
     wire.push(FRAME_VERSION);
-    wire.push(header.frame_type.try_to_u8()?);
+    wire.push(header.frame_type().try_to_u8()?);
 
-    wire.write_u32::<LittleEndian>(header.segment_index).unwrap();
-    wire.write_u32::<LittleEndian>(header.frame_index).unwrap();
-    wire.write_u32::<LittleEndian>(header.plaintext_len).unwrap();
-    // wire.write_u32::<LittleEndian>(header.compressed_len).unwrap();
-    wire.write_u32::<LittleEndian>(header.ciphertext_len).unwrap();
+    wire.write_u32::<LittleEndian>(header.segment_index()).unwrap();
+    wire.write_u32::<LittleEndian>(header.frame_index()).unwrap();
+    wire.write_u32::<LittleEndian>(header.plaintext_len()).unwrap();
+    wire.write_u32::<LittleEndian>(header.ciphertext_len()).unwrap();
 
     // --- Body ---
     wire.extend_from_slice(ciphertext);

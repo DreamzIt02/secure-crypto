@@ -604,6 +604,7 @@ dependencies = [
  "sha2",
  "sha3",
  "sysinfo",
+ "tempfile",
  "thiserror 1.0.69",
  "wgpu",
  "zstd",

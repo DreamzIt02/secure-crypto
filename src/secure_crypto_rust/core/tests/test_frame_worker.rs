@@ -13,15 +13,19 @@
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+    use std::sync::atomic::AtomicBool;
+
     use bytes::Bytes;
     use crypto_core::crypto::KEY_LEN_32;
     use crypto_core::headers::types::HeaderV1;
     use crypto_core::stream_v2::frame_worker::{
         DecryptedFrame, EncryptedFrame, FrameInput, FrameWorkerError,
     };
-    use crypto_core::stream_v2::frame_worker::decrypt::DecryptFrameWorker;
-    use crypto_core::stream_v2::frame_worker::encrypt::EncryptFrameWorker;
+    use crypto_core::stream_v2::frame_worker::decrypt::DecryptFrameWorker1;
+    use crypto_core::stream_v2::frame_worker::encrypt::EncryptFrameWorker1;
     use crypto_core::stream_v2::framing::FrameType;
+    use crypto_core::types::StreamError;
 
     fn test_key() -> Vec<u8> {
         vec![0x42u8; KEY_LEN_32]
@@ -36,15 +40,24 @@ mod tests {
         }
     }
 
+    fn make_workers(header: HeaderV1, key: &[u8]) -> (EncryptFrameWorker1, DecryptFrameWorker1) {
+        let (fatal_tx, _fatal_rx) = crossbeam::channel::unbounded();
+        let cancelled = Arc::new(AtomicBool::new(false));
+
+        let enc = EncryptFrameWorker1::new(header.clone(), key, fatal_tx.clone(), cancelled.clone()).unwrap();
+        let dec = DecryptFrameWorker1::new(header, key, fatal_tx, cancelled).unwrap();
+
+        (enc, dec)
+    }
+
+
     // ✅ 1. Encrypt → decrypt round-trip
     #[test]
     fn encrypt_decrypt_roundtrip() {
         let header = HeaderV1::test_header();
         let key = test_key();
 
-        let enc = EncryptFrameWorker::new(header.clone(), &key).unwrap();
-        let dec = DecryptFrameWorker::new(header, &key).unwrap();
-
+        let (enc, dec) = make_workers(header, &key);
         let input = sample_input(0, b"hello world");
 
         let encrypted = enc.encrypt_frame(&input).unwrap();
@@ -60,7 +73,7 @@ mod tests {
         let header = HeaderV1::test_header();
         let key = test_key();
 
-        let enc = EncryptFrameWorker::new(header, &key).unwrap();
+        let (enc, _dec) = make_workers(header, &key);
         let input = sample_input(7, b"deterministic");
 
         let a = enc.encrypt_frame(&input).unwrap();
@@ -76,8 +89,7 @@ mod tests {
         let header = HeaderV1::test_header();
         let key = test_key();
 
-        let enc = EncryptFrameWorker::new(header.clone(), &key).unwrap();
-        let dec = DecryptFrameWorker::new(header, &key).unwrap();
+        let (enc, dec) = make_workers(header, &key);
 
         let input = sample_input(3, b"secure");
         let encrypted = enc.encrypt_frame(&input).unwrap();
@@ -94,8 +106,11 @@ mod tests {
     fn wrong_key_fails_decryption() {
         let header = HeaderV1::test_header();
 
-        let enc = EncryptFrameWorker::new(header.clone(), &test_key()).unwrap();
-        let dec = DecryptFrameWorker::new(header, &[0x99u8; 32]).unwrap();
+        let (fatal_tx, _fatal_rx) = crossbeam::channel::unbounded();
+        let cancelled = Arc::new(AtomicBool::new(false));
+
+        let enc = EncryptFrameWorker1::new(header.clone(), &test_key(), fatal_tx.clone(), cancelled.clone()).unwrap();
+        let dec = DecryptFrameWorker1::new(header, &[0x99u8; 32], fatal_tx, cancelled).unwrap();
 
         let input = sample_input(0, b"secret");
         let encrypted = enc.encrypt_frame(&input).unwrap();
@@ -109,8 +124,11 @@ mod tests {
         let mut header2 = HeaderV1::test_header();
         header2.salt[0] ^= 0xFF;
 
-        let enc = EncryptFrameWorker::new(HeaderV1::test_header(), &test_key()).unwrap();
-        let dec = DecryptFrameWorker::new(header2, &test_key()).unwrap();
+        let (fatal_tx, _fatal_rx) = crossbeam::channel::unbounded();
+        let cancelled = Arc::new(AtomicBool::new(false));
+
+        let enc = EncryptFrameWorker1::new(HeaderV1::test_header(), &test_key(), fatal_tx.clone(), cancelled.clone()).unwrap();
+        let dec = DecryptFrameWorker1::new(header2, &test_key(), fatal_tx.clone(), cancelled.clone()).unwrap();
 
         let input = sample_input(1, b"oops");
         let encrypted = enc.encrypt_frame(&input).unwrap();
@@ -124,7 +142,7 @@ mod tests {
         let header = HeaderV1::test_header();
         let key = test_key();
 
-        let enc = EncryptFrameWorker::new(header, &key).unwrap();
+        let (enc, _dec) = make_workers(header, &key);
 
         let input = sample_input(0, b"");
         let result = enc.encrypt_frame(&input);
@@ -142,7 +160,7 @@ mod tests {
         let header = HeaderV1::test_header();
         let key = test_key();
 
-        let enc = EncryptFrameWorker::new(header, &key).unwrap();
+        let (enc, _dec) = make_workers(header, &key);
 
         let a = enc.encrypt_frame(&sample_input(1, b"same")).unwrap();
         let b = enc.encrypt_frame(&sample_input(2, b"same")).unwrap();
@@ -156,13 +174,16 @@ mod tests {
         let header = HeaderV1::test_header();
         let key = test_key();
 
-        let worker = EncryptFrameWorker::new(header, &key).unwrap();
+        let (enc, _dec) = make_workers(header, &key);
 
         let (frame_tx, frame_rx) = crossbeam::channel::unbounded::<FrameInput>();
         let (out_tx, out_rx) =
             crossbeam::channel::unbounded::<Result<EncryptedFrame, FrameWorkerError>>();
 
-        worker.run(frame_rx, out_tx);
+        // Spawn the worker in the test
+        std::thread::spawn(move || {
+            enc.run(frame_rx, out_tx);
+        });
 
         frame_tx.send(sample_input(0, b"a")).unwrap();
         frame_tx.send(sample_input(1, b"b")).unwrap();
@@ -180,14 +201,16 @@ mod tests {
         let header = HeaderV1::test_header();
         let key = test_key();
 
-        let enc = EncryptFrameWorker::new(header.clone(), &key).unwrap();
-        let dec = DecryptFrameWorker::new(header, &key).unwrap();
+        let (enc, dec) = make_workers(header, &key);
 
         let (frame_tx, frame_rx) = crossbeam::channel::unbounded::<Bytes>();
         let (out_tx, out_rx) =
             crossbeam::channel::unbounded::<Result<DecryptedFrame, FrameWorkerError>>();
 
-        dec.run(frame_rx, out_tx);
+        // Spawn the worker in the test
+        std::thread::spawn(move || {
+            dec.run(frame_rx, out_tx);
+        });
 
         let e1 = enc.encrypt_frame(&sample_input(0, b"x")).unwrap();
         let e2 = enc.encrypt_frame(&sample_input(1, b"y")).unwrap();
@@ -208,8 +231,7 @@ mod tests {
         let header = HeaderV1::test_header();
         let key = test_key();
 
-        let enc = EncryptFrameWorker::new(header.clone(), &key).unwrap();
-        let dec = DecryptFrameWorker::new(header, &key).unwrap();
+        let (enc, dec) = make_workers(header, &key);
 
         let input = FrameInput {
             frame_type: FrameType::Digest,
@@ -231,7 +253,7 @@ mod tests {
         let header = HeaderV1::test_header();
         let key = test_key();
 
-        let enc = EncryptFrameWorker::new(header, &key).unwrap();
+        let (enc, _dec) = make_workers(header, &key);
 
         let input = FrameInput {
             frame_type: FrameType::Terminator,
@@ -248,6 +270,41 @@ mod tests {
                 if msg.contains("TERMINATOR frame must be empty")
         ));
     }
+
+    // ✅ 12. Fatal error propagation
+    #[test]
+    fn fatal_error_propagates_to_channel() {
+        let header = HeaderV1::test_header();
+        let key = test_key();
+
+        let (fatal_tx, fatal_rx) = crossbeam::channel::unbounded();
+        let cancelled = Arc::new(AtomicBool::new(false));
+
+        let dec = DecryptFrameWorker1::new(header, &key, fatal_tx.clone(), cancelled.clone()).unwrap();
+
+        let (frame_tx, frame_rx) = crossbeam::channel::unbounded::<Bytes>();
+        let (out_tx, out_rx) =
+            crossbeam::channel::unbounded::<Result<DecryptedFrame, FrameWorkerError>>();
+
+        // Spawn the worker in the test
+        std::thread::spawn(move || {
+            dec.run(frame_rx, out_tx);
+        });
+
+        // Send deliberately corrupted wire
+        frame_tx.send(Bytes::from_static(b"corrupted")).unwrap();
+
+        let result = out_rx.recv().unwrap();
+        assert!(result.is_err());
+
+        // Fatal error should also be sent to fatal_tx
+        let fatal = fatal_rx.recv().unwrap();
+        match fatal {
+            StreamError::FrameWorker(FrameWorkerError::Framing(_)) => {}
+            _ => panic!("unexpected fatal error type"),
+        }
+    }
+
 }
 
 // ## 🧠 Coverage Summary

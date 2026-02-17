@@ -25,5 +25,5 @@ pub use types::{
     SegmentWorkerError,
 };
 
-pub use encrypt::EncryptSegmentWorker;
-pub use decrypt::DecryptSegmentWorker;
+pub use encrypt::EncryptSegmentWorker1;
+pub use decrypt::DecryptSegmentWorker1;

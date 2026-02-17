@@ -332,3 +332,251 @@ TODO:
 3. 🧵 **Async (Tokio) version** of the same pipeline
 4. 📊 **Formal backpressure proof** (who can block whom)
 5. 🧪 **End-to-end tests** (fault injection, ordering, shutdown)
+
+---
+
+## 🧭 Connecting All Four Files
+
+1. **`core.rs` (Public API)**  
+
+    * User calls `encrypt_stream_v2`.  
+    * Sets up context, opens input/output, and calls `run_encrypt_pipeline`.
+
+2. **`pipeline.rs` (Pipeline Orchestration)**
+
+    * Writes stream header.  
+    * Spawns reader thread → produces `EncryptSegmentInput`.  
+    * Compression workers (optional).  
+    * Segment workers (`EncryptSegmentWorker::run_v2`) consume segments.  
+    * Writer consumes `EncryptedSegment` results.
+
+3. **`encrypt.rs` (Segment Worker)**
+
+    * Receives `EncryptSegmentInput`.  
+    * Splits into frames (`FrameInput`).  
+    * Dispatches frames to frame workers.  
+    * Collects `EncryptedFrame`s.  
+    * Adds digest + terminator frames.  
+    * Assembles into `EncryptedSegment` with `SegmentHeader`.  
+    * Sends result to pipeline writer.
+
+4. **`encrypt.rs` (Frame Worker)**
+
+    * Receives `FrameInput`.  
+    * Encrypts with AEAD.  
+    * Encodes into wire format.  
+    * Returns `EncryptedFrame` to segment worker.
+
+---
+
+## ✅ Key Invariants Across Pipeline
+
+* **Segmenting**: Each segment ≤ `HeaderV1::chunk_size`.  
+* **Framing**: Each segment → N data frames + 1 digest + 1 terminator.  
+* **Headers**:  
+  * `SegmentHeader.frame_count` = number of data frames only.  
+  * `SegmentHeader.wire_len` = sum of all frame wires.  
+* **Encryption**:  
+  * Nonce derived from salt + frame index.  
+  * AAD binds header fields to ciphertext.  
+* **Termination**:  
+  * Final empty segment marks EOF.  
+  * Terminator frame marks end of segment.
+
+---
+
+## 🔗 Big Picture
+
+The encrypt pipeline is now fully mapped:
+
+### **Public API → Pipeline → Segment Worker → Frame Worker → Writer**
+
+Each stage is isolated, uses channels for communication, and merges telemetry for performance profiling.
+
+---
+
+Perfect — with this last piece (`decrypt_frame.rs`), we now have the **complete decrypt pipeline** mapped end‑to‑end. Let’s stitch everything together:
+
+---
+
+## 🧭 Connecting All Four Decrypt Files
+
+1. **`core_decrypt.rs` (Public API)**  
+   * User calls `decrypt_stream_v2`.  
+   * Sets up context, opens input/output, and calls `run_decrypt_pipeline`.
+
+2. **`pipeline_decrypt.rs` (Pipeline Orchestration)**  
+   * Validates stream header.  
+   * Spawns reader thread → produces `DecryptSegmentInput`.  
+   * Segment workers (`DecryptSegmentWorker::run_v2`) consume segments.  
+   * Adapter forwards results to decompression workers.  
+   * Writer consumes `DecryptedSegment` results and writes plaintext in order.
+
+3. **`decrypt_segment.rs` (Segment Worker)**  
+   * Receives `DecryptSegmentInput`.  
+   * Splits segment wire into frames (`FrameHeader::ciphertext_len`).  
+   * Dispatches frames to frame workers.  
+   * Collects `DecryptedFrame`s.  
+   * Verifies digest + terminator.  
+   * Assembles plaintext into `DecryptedSegment`.  
+   * Sends result to pipeline writer.
+
+4. **`decrypt_frame.rs` (Frame Worker)**  
+   * Receives raw frame slice (`Bytes`).  
+   * Parses header, validates, rebuilds AAD, derives nonce.  
+   * Decrypts ciphertext with AEAD.  
+   * Returns `DecryptedFrame` to segment worker.
+
+---
+
+## ✅ Key Invariants Across Decrypt Pipeline
+
+* **Segmenting**: Each segment wire length = `SegmentHeader::wire_len`.
+* **Framing**: Each segment contains N data frames + 1 digest + 1 terminator.
+* **Headers**:
+  * `FrameHeader.ciphertext_len` must match actual ciphertext length.
+  * Digest frame index = number of data frames.
+  * Terminator frame index = number of data frames + 1.
+* **Crypto**:
+  * Nonce derived from salt + frame index.
+  * AAD binds header fields to ciphertext.
+  * AEAD open must succeed (authenticity check).
+* **Termination**:
+  * Final empty segment marks EOF.
+  * Terminator frame marks end of segment.
+
+---
+
+## 🔗 Big Picture (1)
+
+Now both sides are complete:
+
+* **Encrypt pipeline**: Public API → Pipeline → Segment Worker → Frame Worker → Writer.  
+* **Decrypt pipeline**: Public API → Pipeline → Segment Worker → Frame Worker → Writer.
+
+Each stage is isolated, uses channels for communication, and merges telemetry for performance profiling. The symmetry ensures correctness: what encrypt produces, decrypt consumes.
+
+---
+
+## 🔧 Step 1: Define the Error Channel
+
+At the **pipeline.rs / pipeline_decrypt.rs** level, create a global fatal error channel:
+
+```rust
+let (fatal_tx, fatal_rx) = unbounded::<StreamError>();
+let cancelled = Arc::new(AtomicBool::new(false));
+```
+
+* `fatal_tx`: any worker can send an error here.
+* `fatal_rx`: monitor thread listens.
+* `cancelled`: shared flag to stop workers early.
+
+---
+
+## 🔧 Step 2: Monitor Thread
+
+Spawn a monitor that listens for the first fatal error:
+
+```rust
+let cancelled_monitor = cancelled.clone();
+scope.spawn(move || {
+    if let Ok(err) = fatal_rx.recv() {
+        eprintln!("[FATAL] error detected: {err}");
+        cancelled_monitor.store(true, Ordering::Relaxed);
+
+        // Drop channels to unblock recv loops
+        drop(seg_tx);
+        drop(frame_tx);
+        drop(out_tx);
+    }
+});
+```
+
+This ensures the pipeline short‑circuits immediately.
+
+---
+
+## 🔧 Step 3: Feed Errors from Segment Workers
+
+In **EncryptSegmentWorker / DecryptSegmentWorker**, wrap the result send:
+
+```rust
+match process_segment(&segment) {
+    Ok(res) => {
+        if tx.send(Ok(res)).is_err() {
+            let _ = fatal_tx.send(StreamError::PipelineError("segment tx closed".into()));
+            return;
+        }
+    }
+    Err(e) => {
+        let _ = fatal_tx.send(StreamError::SegmentWorker(e));
+        return;
+    }
+}
+```
+
+* On any error, send to `fatal_tx`.
+* Worker exits immediately.
+
+---
+
+## 🔧 Step 4: Feed Errors from Frame Workers
+
+In **EncryptFrameWorker::run / DecryptFrameWorker::run**, after encrypt/decrypt:
+
+```rust
+while let Ok(input) = rx.recv() {
+    let result = self.encrypt_frame(&input); // or decrypt_frame
+    if tx.send(result).is_err() {
+        let _ = fatal_tx.send(StreamError::FrameWorker(FrameWorkerError::WorkerDisconnected));
+        return;
+    }
+    if cancelled.load(Ordering::Relaxed) {
+        return; // stop early if fatal error triggered
+    }
+}
+```
+
+* If frame worker fails, send error to `fatal_tx`.
+* If `cancelled` is set, exit cleanly.
+
+---
+
+## 🔧 Step 5: Writer Integration
+
+In the **OrderedWriter loop**:
+
+```rust
+for res in out_rx.iter() {
+    match res {
+        Ok(segment) => { ordered_writer.push(segment)?; }
+        Err(e) => {
+            let _ = fatal_tx.send(StreamError::Writer(e));
+            break;
+        }
+    }
+    if cancelled.load(Ordering::Relaxed) { break; }
+}
+```
+
+---
+
+## ✅ What This Achieves
+* **Any stage** (reader, segment worker, frame worker, writer) can feed errors into `fatal_tx`.
+* The monitor thread sets `cancelled = true` and drops channels.
+* All blocking `recv()` loops exit cleanly.
+* The pipeline short‑circuits immediately on error, instead of hanging after 8 segments.
+
+---
+
+## 🔗 Flow Summary
+* **pipeline.rs → EncryptFrameWorker**:  
+  Segment worker sends errors to `fatal_tx` if frame collection fails. Frame worker sends errors if AEAD fails.  
+
+* **pipeline_decrypt.rs → DecryptFrameWorker**:  
+  Segment worker sends errors if digest/terminator mismatch. Frame worker sends errors if AEAD open fails.  
+
+* **Monitor thread**:  
+  Listens on `fatal_rx`, sets `cancelled`, drops channels → unblocks all workers.
+
+---

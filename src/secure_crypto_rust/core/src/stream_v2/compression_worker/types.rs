@@ -71,7 +71,7 @@ pub trait CompressionBackend: Send {
 }
 
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum CompressionWorkerError {
     Compression(CompressionError),
     StateError(String),

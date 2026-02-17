@@ -35,7 +35,7 @@ impl AadHeader {
     pub const LEN_V1: usize = AadHeader::FRAME_LEN  // FRAME_LEN
         + HeaderV1::LEN;                  // HeaderV1 len
 }
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum AadError {
     /// Unknown or unsupported AAD domain.
     UnknownDomain { raw: u16 },
@@ -64,7 +64,7 @@ impl From<HeaderError> for AadError {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum NonceError {
     /// Salt is invalid (e.g., all zeros).
     InvalidSalt,
@@ -90,7 +90,7 @@ impl std::fmt::Display for NonceError {
 impl std::error::Error for NonceError {}
 
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum CryptoError {
     /// Unsupported cipher suite ID from header.
     UnsupportedCipher { cipher_id: u16 },

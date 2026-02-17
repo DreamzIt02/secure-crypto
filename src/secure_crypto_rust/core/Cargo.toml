@@ -84,6 +84,7 @@ pollster.workspace = true
 wgpu.workspace = true
 sysinfo.workspace = true
 base64.workspace = true
+tempfile.workspace = true
 
 # ---------------------------------------------------------------------------
 # Dev & test dependencies (FAST)
@@ -91,6 +92,37 @@ base64.workspace = true
 [dev-dependencies]
 criterion = "0.5"
 proptest.workspace = true
+
+[[test]]
+name = "public_api"
+path = "tests/public_api/mod.rs"
+[[test]]
+name = "test_public_api"
+path = "tests/public_api/test_public_api.rs"
+[[test]]
+name = "test_roundtrip"
+path = "tests/public_api/test_roundtrip.rs"
+[[test]]
+name = "test_input_variants"
+path = "tests/public_api/test_input_variants.rs"
+[[test]]
+name = "test_output_variants"
+path = "tests/public_api/test_output_variants.rs"
+[[test]]
+name = "test_header_meta"
+path = "tests/public_api/test_header_meta.rs"
+[[test]]
+name = "test_corrupt_detection"
+path = "tests/public_api/test_corrupt_detection.rs"
+[[test]]
+name = "test_parallelism_profiles"
+path = "tests/public_api/test_parallelism_profiles.rs"
+[[test]]
+name = "test_telemetry_config"
+path = "tests/public_api/test_telemetry_config.rs"
+[[test]]
+name = "test_compression_cipher_variants"
+path = "tests/public_api/test_compression_cipher_variants.rs"
 
 # ---------------------------------------------------------------------------
 # Build profiles (inherit from workspace)

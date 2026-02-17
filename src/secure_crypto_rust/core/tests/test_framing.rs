@@ -8,19 +8,13 @@
 
 #[cfg(test)]
 mod tests {
-    use crypto_core::stream_v2::framing::{decode::{decode_frame, decode_frame_header, parse_frame_header}, encode::encode_frame, types::{
+    use crypto_core::stream_v2::framing::{decode::{decode_frame, decode_frame_header}, encode::encode_frame, types::{
         FRAME_VERSION, FrameError, FrameHeader, FrameView, FrameType
     }};
 
     fn sample_record() -> FrameView<'static> {
         FrameView {
-            header: FrameHeader {
-                frame_type: FrameType::Data,
-                segment_index: 42,
-                frame_index: 7,
-                plaintext_len: 1024,
-                ciphertext_len: 16,
-            },
+            header: FrameHeader::new(42, 7, FrameType::Data, 1024, 16),
             ciphertext: b"0123456789ABCDEF",
         }
     }
@@ -45,7 +39,7 @@ mod tests {
         let record = sample_record();
         let wire = encode_frame(&record.header, record.ciphertext).unwrap();
 
-        let header = parse_frame_header(&wire).unwrap();
+        let header = FrameHeader::from_bytes(&wire).unwrap();
         assert_eq!(header, record.header);
     }
 
@@ -56,7 +50,7 @@ mod tests {
         let record = sample_record();
         let wire = encode_frame(&record.header, record.ciphertext).unwrap();
 
-        let a = parse_frame_header(&wire).unwrap();
+        let a = FrameHeader::from_bytes(&wire).unwrap();
         let b = decode_frame_header(&wire).unwrap();
 
         assert_eq!(a, b);
@@ -68,7 +62,7 @@ mod tests {
     fn truncated_header_is_rejected() {
         let buf = vec![0u8; FrameHeader::LEN - 1];
         assert!(matches!(
-            parse_frame_header(&buf),
+            FrameHeader::from_bytes(&buf),
             Err(FrameError::Truncated)
         ));
     }
@@ -107,8 +101,10 @@ mod tests {
 
     #[test]
     fn ciphertext_length_mismatch_short() {
-        let mut record = sample_record();
-        record.header.ciphertext_len = 32; // lie
+        let record = FrameView {
+            header: FrameHeader::new(42, 7, FrameType::Data, 1024, 32), // lie
+            ciphertext: b"0123456789ABCDEF",
+        };
 
         assert!(matches!(
             encode_frame(&record.header, record.ciphertext),
@@ -137,13 +133,7 @@ mod tests {
     #[test]
     fn zero_length_ciphertext_is_allowed() {
         let record = FrameView {
-            header: FrameHeader {
-                frame_type: FrameType::Data,
-                segment_index: 42,
-                frame_index: 7,
-                plaintext_len: 1024,
-                ciphertext_len: 0,
-            },
+            header: FrameHeader::new(42, 7, FrameType::Data, 1024, 0),
             ciphertext: b"",
         };
 

@@ -31,10 +31,10 @@ mod telemetry_encrypt_tests {
     fn run_pipeline_with_data(data: &[u8]) -> TelemetrySnapshot {
         let mut reader = PayloadReader::new(Cursor::new(data.to_vec()));
         let mut writer = Cursor::new(Vec::new());
-        let (mut crypto, profile, log_manager) = setup_enc_context(DigestAlg::Blake3);
+        let (crypto, profile, log_manager) = setup_enc_context(DigestAlg::Blake3);
         let config_pipe = PipelineConfig::new(profile.clone(), None);
 
-        let mut snapshot = run_encrypt_pipeline(&mut reader, &mut writer, &mut crypto, &config_pipe, log_manager)
+        let mut snapshot = run_encrypt_pipeline(&mut reader, &mut writer, Arc::new(crypto), &config_pipe, log_manager)
             .expect("pipeline should succeed");
 
         // Attach the buffer contents
@@ -85,8 +85,8 @@ mod telemetry_encrypt_tests {
         // Overhead should still exist (header, terminator, etc.)
         assert!(snapshot.bytes_overhead > 0);
 
-        // Segments processed should be >= 2 (one data + final empty segment)
-        assert!(snapshot.segments_processed >= 2);
+        // Segments processed should be >= 2 (one data segment)
+        assert!(snapshot.segments_processed >= 1);
     }
 
     #[test]

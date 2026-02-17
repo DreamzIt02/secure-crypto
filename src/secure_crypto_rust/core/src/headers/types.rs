@@ -30,11 +30,19 @@ pub enum Strategy {
     Auto       = 0x0002,
 }
 impl Strategy {
+    pub fn from(raw: u16) -> Result<Self, HeaderError> {
+        match raw {
+            x if x == Strategy::Sequential as u16    => Ok(Strategy::Sequential),
+            x if x == Strategy::Parallel as u16    => Ok(Strategy::Parallel),
+            x if x == Strategy::Auto as u16     => Ok(Strategy::Auto),
+            _ => Err(HeaderError::UnknownStrategy { raw }),
+        }
+    }
     pub fn verify(raw: u16) -> Result<(), HeaderError> {
         match raw {
-            x if x == Strategy::Sequential as u16 => Ok(()),
-            x if x == Strategy::Parallel as u16   => Ok(()),
-            x if x == Strategy::Auto as u16       => Ok(()),
+            x if x == Strategy::Sequential as u16   => Ok(()),
+            x if x == Strategy::Parallel as u16     => Ok(()),
+            x if x == Strategy::Auto as u16         => Ok(()),
             _ => Err(HeaderError::UnknownStrategy { raw }),
         }
     }
@@ -132,8 +140,8 @@ pub struct HeaderV1 {
     pub magic: [u8; 4],        // "RSE1" magic marker
     pub version: u16,          // protocol version
     pub alg_profile: u16,      // bundle id (cipher + PRF choice)
-    pub cipher: u16,           // cipher enum
-    pub hkdf_prf: u16,         // PRF enum
+    pub cipher: u16,           // cipher enum (cipher_ids)
+    pub hkdf_prf: u16,         // PRF enum (prf_ids)
     pub compression: u16,      // compression enum (codec_ids)
     pub strategy: u16,         // sequential / parallel / auto
     pub aad_domain: u16,       // binds header semantics in AAD
@@ -166,7 +174,7 @@ impl Default for HeaderV1 {
             cipher: CipherSuite::Chacha20Poly1305 as u16,
             hkdf_prf: HkdfPrf::Sha256 as u16,
             compression: CompressionCodec::Auto as u16,
-            strategy: Strategy::Sequential as u16,
+            strategy: Strategy::Auto as u16,
             aad_domain: AadDomain::Generic as u16,
             flags: 0,
             chunk_size: DEFAULT_CHUNK_SIZE as u32,        // 64 KiB default
@@ -205,7 +213,7 @@ impl HeaderV1 {
             cipher: CipherSuite::Chacha20Poly1305 as u16,
             hkdf_prf: HkdfPrf::Sha256 as u16,
             compression: CompressionCodec::Deflate as u16,
-            strategy: Strategy::Sequential as u16,
+            strategy: Strategy::Auto as u16,
             aad_domain: AadDomain::Generic as u16,
             flags: 0,
             chunk_size: DEFAULT_CHUNK_SIZE as u32,
@@ -337,7 +345,7 @@ pub fn fmt_bytes(b: &[u8]) -> String {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum HeaderError {
     /// Buffer too short to contain a minimal header.
     BufferTooShort { have: usize, need: usize },

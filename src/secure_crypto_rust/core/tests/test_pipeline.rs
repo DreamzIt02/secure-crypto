@@ -15,11 +15,11 @@ mod tests {
 
     use crypto_core::constants::DEFAULT_CHUNK_SIZE;
     use crypto_core::crypto::{DigestAlg, KEY_LEN_32};
-    use crypto_core::headers::{HeaderV1};
+    use crypto_core::headers::{HeaderV1, Strategy};
     use crypto_core::recovery::AsyncLogManager;
     use crypto_core::stream_v2::framing::FrameHeader;
     use crypto_core::stream_v2::io::{PayloadReader};
-    use crypto_core::stream_v2::parallelism::HybridParallelismProfile;
+    use crypto_core::stream_v2::parallelism::{HybridParallelismProfile, ParallelismConfig};
     use crypto_core::stream_v2::pipeline::{PipelineConfig, run_decrypt_pipeline, run_encrypt_pipeline};
     use crypto_core::stream_v2::segment_worker::{EncryptContext, DecryptContext, SegmentWorkerError};
     use crypto_core::stream_v2::segmenting::SegmentHeader;
@@ -64,8 +64,8 @@ mod tests {
         plaintext: &[u8],
         profile: HybridParallelismProfile,
     ) -> Result<(Vec<u8>, TelemetrySnapshot), StreamError> {
-        let (mut crypto_enc, log_enc) = setup_enc_context(DigestAlg::Sha256);
-        let (mut crypto_dec, log_dec) = setup_dec_context(DigestAlg::Sha256);
+        let (crypto_enc, log_enc) = setup_enc_context(DigestAlg::Sha256);
+        let (crypto_dec, log_dec) = setup_dec_context(DigestAlg::Sha256);
 
         // PipelineConfig now expects Option<Arc<Mutex<Vec<u8>>>>
         let config_pipe = PipelineConfig::new(profile.clone(), None);
@@ -76,10 +76,13 @@ mod tests {
         let mut enc_reader = PayloadReader::new(std::io::Cursor::new(plaintext.to_vec()));
         let enc_writer = std::io::Cursor::new(&mut encrypted);
 
+        // Wrap in Arc before passing into pipeline
+        let crypto_enc = Arc::new(crypto_enc);
+
         let enc_snapshot = run_encrypt_pipeline(
             &mut enc_reader,
             enc_writer,
-            &mut crypto_enc,
+            crypto_enc,
             &config_pipe, // pass by reference, not move
             log_enc,
         )?;
@@ -91,10 +94,13 @@ mod tests {
         let (_header, mut dec_reader) = PayloadReader::with_header(dec_cursor)?;
         let dec_writer = std::io::Cursor::new(&mut decrypted);
 
+        // Wrap in Arc before passing into pipeline
+        let crypto_dec = Arc::new(crypto_dec);
+
         run_decrypt_pipeline(
             &mut dec_reader,
             dec_writer,
-            &mut crypto_dec,
+            crypto_dec,
             &config_pipe, // pass by reference here too
             log_dec,
         )?;
@@ -109,9 +115,10 @@ mod tests {
     // ------------------------------------------------------------
     #[test]
     fn decrypt_pipeline_exact_multiple_chunk_size() {
-        let (mut crypto_enc, log_enc) = setup_enc_context(DigestAlg::Sha256);
-        let (mut crypto_dec, log_dec) = setup_dec_context(DigestAlg::Sha256);
-        let profile = HybridParallelismProfile::new(2, 2, 4);
+        let (crypto_enc, log_enc) = setup_enc_context(DigestAlg::Sha256);
+        let (crypto_dec, log_dec) = setup_dec_context(DigestAlg::Sha256);
+        let config_para = ParallelismConfig::new(2, 2, 0.5, 4);
+        let profile = HybridParallelismProfile::from_stream_header(crypto_enc.header, Some(config_para)).expect("valid parallelism profile");
         let config_pipe = PipelineConfig::new(profile.clone(), None);
 
         let chunk_size = crypto_enc.header.chunk_size as usize;
@@ -121,10 +128,14 @@ mod tests {
         // Encrypt
         let mut encrypted = Vec::new();
         let mut enc_reader = PayloadReader::new(Cursor::new(data.clone()));
+
+        // Wrap in Arc before passing into pipeline
+        let crypto_enc = Arc::new(crypto_enc);
+
         run_encrypt_pipeline(
             &mut enc_reader,
             Cursor::new(&mut encrypted),
-            &mut crypto_enc,
+            crypto_enc,
             &config_pipe,
             log_enc,
         ).expect("encryption pipeline should succeed");
@@ -132,46 +143,20 @@ mod tests {
         // Decrypt
         let dec_cursor = Cursor::new(encrypted);
         let (_header, mut dec_reader) = PayloadReader::with_header(dec_cursor).unwrap();
+
+        // Wrap in Arc before passing into pipeline
+        let crypto_dec = Arc::new(crypto_dec);
+
         let mut decrypted = Vec::new();
         let snapshot = run_decrypt_pipeline(
             &mut dec_reader,
             Cursor::new(&mut decrypted),
-            &mut crypto_dec,
+            crypto_dec,
             &config_pipe,
             log_dec,
         ).expect("decryption pipeline should finish");
 
         assert_eq!(decrypted.len(), data.len());
-        assert!(snapshot.segments_processed >= num_segments as u64);
-    }
-
-    #[test]
-    fn encrypt_pipeline_exact_multiple_chunk_size() {
-        // Setup context
-        let (mut crypto_enc, log_enc) = setup_enc_context(DigestAlg::Sha256);
-        // let (crypto_dec, log_dec) = setup_dec_context(DigestAlg::Sha256);
-        let profile = HybridParallelismProfile::new(2, 2, 4);
-        let config_pipe = PipelineConfig::new(profile, None);
-
-        // Match the header's chunk_size (64 KiB)
-        let chunk_size = crypto_enc.header.chunk_size as usize;
-        let num_segments = 3;
-        let data = vec![0x11u8; chunk_size * num_segments]; // exact multiple of header chunk_size
-
-        let mut enc_reader = PayloadReader::new(Cursor::new(data.clone()));
-
-        // First encrypt to produce ciphertext
-        let mut encrypted = Vec::new();
-        let snapshot = run_encrypt_pipeline(
-            &mut enc_reader,
-            Cursor::new(&mut encrypted),
-            &mut crypto_enc,
-            &config_pipe,
-            log_enc,
-        ).expect("encryption pipeline should finish");
-
-        // Assert we got some output and telemetry
-        assert!(!encrypted.is_empty(), "encrypted stream should not be empty");
         assert!(snapshot.segments_processed >= num_segments as u64);
     }
 
@@ -192,9 +177,12 @@ mod tests {
     fn encrypt_decrypt_roundtrip_parallel() {
         let data = vec![0xAB; 64 * 1024];
 
+        let config_para = ParallelismConfig::new(4, 4, 0.5, 8);
+        let profile = HybridParallelismProfile::with_strategy(Strategy::Parallel, DEFAULT_CHUNK_SIZE as u32,Some(config_para)).expect("valid parallelism profile");
+
         let (out, _) = run_encrypt_decrypt(
             &data,
-            HybridParallelismProfile::new(4, 4, 8),
+            profile,
         )
         .unwrap();
 
@@ -203,7 +191,7 @@ mod tests {
 
     #[test]
     fn header_mismatch_is_detected() {
-        let (mut crypto_enc, log_enc) = setup_enc_context(DigestAlg::Sha256);
+        let (crypto_enc, log_enc) = setup_enc_context(DigestAlg::Sha256);
         let (_crypto_dec, _log_dec) = setup_dec_context(DigestAlg::Sha256);
         let profile = HybridParallelismProfile::single_threaded();
         let config_pipe = PipelineConfig::new(profile.clone(), None);
@@ -212,11 +200,13 @@ mod tests {
 
         let mut enc_reader = PayloadReader::new(Cursor::new(data.clone()));
         let mut encrypted = Vec::new();
+        // Wrap in Arc before passing into pipeline
+        let crypto_enc = Arc::new(crypto_enc);
 
         run_encrypt_pipeline(
             &mut enc_reader,
             Box::new(Cursor::new(&mut encrypted)),
-            &mut crypto_enc,
+            crypto_enc,
             &config_pipe,
             log_enc,
         )
@@ -243,19 +233,21 @@ mod tests {
 
     #[test]
     fn detects_corrupted_stream() {
-        let (mut crypto_enc, log_enc) = setup_enc_context(DigestAlg::Sha256);
-        let (mut crypto_dec, log_dec) = setup_dec_context(DigestAlg::Sha256);
+        let (crypto_enc, log_enc) = setup_enc_context(DigestAlg::Sha256);
+        let (crypto_dec, log_dec) = setup_dec_context(DigestAlg::Sha256);
         let profile = HybridParallelismProfile::single_threaded();
         let config_pipe = PipelineConfig::new(profile.clone(), None);
 
         let data = b"this will be corrupted";
         let mut enc_reader = PayloadReader::new(Cursor::new(data.clone()));
         let mut encrypted = Vec::new();
+        // Wrap in Arc before passing into pipeline
+        let crypto_enc = Arc::new(crypto_enc);
 
         run_encrypt_pipeline(
             &mut enc_reader,
             Box::new(Cursor::new(&mut encrypted)),
-            &mut crypto_enc,
+            crypto_enc,
             &config_pipe,
             log_enc,
         )
@@ -266,17 +258,19 @@ mod tests {
         let header_len = HeaderV1::LEN;
         let seg_hdr_len = SegmentHeader::LEN;
         let frame_hdr_len = FrameHeader::LEN;
-        let ct_start = header_len + seg_hdr_len + frame_hdr_len + 2;
+        let ct_start = header_len + seg_hdr_len + frame_hdr_len + 5;
         encrypted[ct_start] ^= 0xAA; // guaranteed inside ciphertext
 
 
         let dec_cursor = Cursor::new(encrypted);
         let (_header, mut dec_reader) = PayloadReader::with_header(dec_cursor).unwrap();
+        // Wrap in Arc before passing into pipeline
+        let crypto_dec = Arc::new(crypto_dec);
 
         let err = run_decrypt_pipeline(
             &mut dec_reader,
             Box::new(Cursor::new(Vec::new())),
-            &mut crypto_dec,
+            crypto_dec,
             &config_pipe,
             log_dec,
         )
@@ -286,13 +280,49 @@ mod tests {
     }
 
     #[test]
+    fn encrypt_pipeline_exact_multiple_chunk_size() {
+        // Setup context
+        let (crypto_enc, log_enc) = setup_enc_context(DigestAlg::Sha256);
+        // let (crypto_dec, log_dec) = setup_dec_context(DigestAlg::Sha256);
+        let config_para = ParallelismConfig::new(2, 2, 0.5, 4);
+        let profile = HybridParallelismProfile::from_stream_header(crypto_enc.header, Some(config_para)).expect("valid parallelism profile");
+        let config_pipe = PipelineConfig::new(profile.clone(), None);
+
+        // Match the header's chunk_size (64 KiB)
+        let chunk_size = crypto_enc.header.chunk_size as usize;
+        let num_segments = 3;
+        let data = vec![0x11u8; chunk_size * num_segments]; // exact multiple of header chunk_size
+
+        let mut enc_reader = PayloadReader::new(Cursor::new(data.clone()));
+        // Wrap in Arc before passing into pipeline
+        let crypto_enc = Arc::new(crypto_enc);
+
+        // First encrypt to produce ciphertext
+        let mut encrypted = Vec::new();
+        let snapshot = run_encrypt_pipeline(
+            &mut enc_reader,
+            Cursor::new(&mut encrypted),
+            crypto_enc,
+            &config_pipe,
+            log_enc,
+        ).expect("encryption pipeline should finish");
+
+        println!("✓ Encryption succeeded: segment processed {}", snapshot.segments_processed);
+
+        // Assert we got some output and telemetry
+        assert!(!encrypted.is_empty(), "encrypted stream should not be empty");
+        assert!(snapshot.segments_processed >= num_segments as u64);
+    }
+
+    #[test]
     fn exact_multiple_of_chunk_size_final_segment() {
         // Suppose segment_size = 64 (from SegmentCryptoContext)
         let chunk_size = DEFAULT_CHUNK_SIZE;
         let num_segments = 5;
         let data = vec![0xABu8; chunk_size * num_segments]; // exactly multiple of chunk_size
 
-        let profile = HybridParallelismProfile::new(2, 2, 4);
+        let config_para = ParallelismConfig::new(2, 2, 0.5, 4);
+        let profile = HybridParallelismProfile::with_strategy(Strategy::Parallel, DEFAULT_CHUNK_SIZE as u32,Some(config_para)).expect("valid parallelism profile");
 
         // Run encrypt + decrypt pipeline
         let (decrypted, enc_snapshot) = run_encrypt_decrypt(&data, profile)
@@ -312,9 +342,12 @@ mod tests {
             data.extend_from_slice(&i.to_le_bytes());
         }
 
+        let config_para = ParallelismConfig::new(6, 6, 0.5, 12);
+        let profile = HybridParallelismProfile::with_strategy(Strategy::Parallel, DEFAULT_CHUNK_SIZE as u32,Some(config_para)).expect("valid parallelism profile");
+
         let (out, _) = run_encrypt_decrypt(
             &data,
-            HybridParallelismProfile::new(6, 6, 12),
+            profile,
         )
         .unwrap();
 
@@ -326,9 +359,12 @@ mod tests {
         let chunk = DEFAULT_CHUNK_SIZE;
         let data = vec![1u8; chunk * 10];
 
+        let config_para = ParallelismConfig::new(2, 2, 0.5, 4);
+        let profile = HybridParallelismProfile::with_strategy(Strategy::Parallel, chunk as u32,Some(config_para)).expect("valid parallelism profile");
+
         let (out, _) = run_encrypt_decrypt(
             &data,
-            HybridParallelismProfile::new(2, 2, 4),
+            profile,
         )
         .unwrap();
         
@@ -350,11 +386,15 @@ mod tests {
 
     #[test]
     fn bounded_backpressure_does_not_deadlock() {
+        let chunk = DEFAULT_CHUNK_SIZE;
         let data = vec![42u8; 1024 * 1024 * 118];
+
+        let config_para = ParallelismConfig::new(8, 8, 0.5, 1);
+        let profile = HybridParallelismProfile::with_strategy(Strategy::Parallel, chunk as u32,Some(config_para)).expect("valid parallelism profile");
 
         let (out, _) = run_encrypt_decrypt(
             &data,
-            HybridParallelismProfile::new(8, 8, 1), // extreme pressure
+            profile, // extreme pressure
         )
         .unwrap();
 

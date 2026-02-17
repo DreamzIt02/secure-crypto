@@ -8,7 +8,7 @@ use crate::{
     crypto::{CryptoError, DigestAlg, derive_session_key_32}, 
     headers::HeaderV1, recovery::AsyncLogManager, 
     stream_v2::{io::{InputSource, OutputSink, PayloadReader, open_input, open_output}, 
-    parallelism::HybridParallelismProfile, pipeline::{PipelineConfig, run_decrypt_pipeline, run_encrypt_pipeline}, 
+    parallelism::{HybridParallelismProfile, ParallelismConfig}, pipeline::{PipelineConfig, run_decrypt_pipeline, run_encrypt_pipeline}, 
     segment_worker::{DecryptContext, EncryptContext}}, 
     telemetry::TelemetrySnapshot, 
     types::StreamError
@@ -45,6 +45,14 @@ pub struct ApiConfig {
     /// Whether to collect detailed metrics during pipeline execution.
     /// Currently unused, reserved for future expansion.
     pub collect_metrics: Option<bool>,
+
+    /// 
+    /// Supported digest algorithms (extensible).
+    pub alg: Option<DigestAlg>,
+
+    /// 
+    /// Parallelism configuration.
+    pub parallelism: Option<ParallelismConfig>,
 }
 
 impl Default for ApiConfig {
@@ -52,41 +60,43 @@ impl Default for ApiConfig {
         Self {
             with_buf: Some(false),      // default: no buffer
             collect_metrics: Some(false), // default: no metrics
+            alg: Some(DigestAlg::Blake3), // default: Blake3
+            parallelism: Some(ParallelismConfig::default()),
         }
     }
 }
 
 impl ApiConfig {
-    pub fn new(with_buf: Option<bool>, collect_metrics: Option<bool>) -> Self {
+    pub fn new(with_buf: Option<bool>, collect_metrics: Option<bool>, alg: Option<DigestAlg>, parallelism: Option<ParallelismConfig>) -> Self {
         Self {
             with_buf: with_buf.or(Some(false)),
             collect_metrics: collect_metrics.or(Some(false)),
+            alg: alg.or(Some(DigestAlg::Blake3)),
+            parallelism: Some(parallelism.unwrap_or_default()),
         }
-    }
-
-    pub fn with_buf_enabled() -> Self {
-        Self { with_buf: Some(true), collect_metrics: Some(false) }
     }
 }
 
-fn setup_enc_context(master_key: &[u8], header: &HeaderV1, alg: DigestAlg)
+fn setup_enc_context(master_key: &[u8], header: &HeaderV1, config: ApiConfig)
     -> Result<(EncryptContext, HybridParallelismProfile, Arc<AsyncLogManager>), StreamError> 
 {
     let session_key = derive_session_key_32(master_key, header).map_err(StreamError::Crypto)?;
-    let profile = HybridParallelismProfile::dynamic(header.chunk_size as u32, 0.50, 64);
-    let context = EncryptContext::new(header.clone(), profile.clone(), &session_key, alg)
+
+    let profile = HybridParallelismProfile::from_stream_header(header.clone(), config.parallelism)?;
+    let context = EncryptContext::new(header.clone(), profile.clone(), &session_key, config.alg.unwrap())
         .map_err(StreamError::SegmentWorker)?;
     let log_manager = Arc::new(AsyncLogManager::new("stream_v2_enc.log", 100)?);
 
     Ok((context, profile, log_manager))
 }
 
-fn setup_dec_context(master_key: &[u8], header: &HeaderV1, alg: DigestAlg)
+fn setup_dec_context(master_key: &[u8], header: &HeaderV1, config: ApiConfig)
     -> Result<(DecryptContext, HybridParallelismProfile, Arc<AsyncLogManager>), StreamError> 
 {
     let session_key = derive_session_key_32(master_key, header).map_err(StreamError::Crypto)?;
-    let profile = HybridParallelismProfile::dynamic(header.chunk_size as u32, 0.50, 64);
-    let context = DecryptContext::from_stream_header(header.clone(), profile.clone(), &session_key, alg)
+
+    let profile = HybridParallelismProfile::from_stream_header(header.clone(), config.parallelism)?;
+    let context = DecryptContext::from_stream_header(header.clone(), profile.clone(), &session_key, config.alg.unwrap())
         .map_err(StreamError::SegmentWorker)?;
     let log_manager = Arc::new(AsyncLogManager::new("stream_v2_dec.log", 100)?);
 
@@ -109,13 +119,17 @@ pub fn encrypt_stream_v2(
     // ---- Read stream header ----
     let mut payload_reader = PayloadReader::new(reader);
 
-    let (mut crypto, profile, log_manager) = setup_enc_context(master_key, &params.header, DigestAlg::Blake3)?;
+    let (crypto, profile, log_manager) = setup_enc_context(master_key, &params.header, config)?;
     let config_pipe = PipelineConfig::new(profile, maybe_buf.clone());
 
+    // Wrap in Arc before passing into pipeline
+    let crypto = Arc::new(crypto);
+
+    // Call pipeline
     let mut snapshot = run_encrypt_pipeline(
         &mut payload_reader,
         writer,
-        &mut crypto,
+        crypto,
         &config_pipe,
         log_manager,
     )?;
@@ -148,13 +162,17 @@ pub fn decrypt_stream_v2(
     // Assert reader is positioned correctly
     let (header, mut payload_reader) = PayloadReader::with_header(reader)?;
 
-    let (mut crypto, profile, log_manager) = setup_dec_context(master_key, &header, DigestAlg::Blake3)?;
+    let (crypto, profile, log_manager) = setup_dec_context(master_key, &header, config)?;
     let config_pipe = PipelineConfig::new(profile, maybe_buf.clone());
+    
+    // Wrap in Arc before passing into pipeline
+    let crypto = Arc::new(crypto);
 
+    // Call pipeline
     let mut snapshot = run_decrypt_pipeline(
         &mut payload_reader,
         writer,
-        &mut crypto,
+        crypto,
         &config_pipe,
         log_manager,
     )?;

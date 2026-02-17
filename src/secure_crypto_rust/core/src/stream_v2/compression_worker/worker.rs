@@ -32,8 +32,12 @@ pub fn run_compression_worker(
     mut backend: Box<dyn super::CompressionBackend>,
     scheduler: Arc<Mutex<Scheduler>>,
 ) {
+    eprintln!("[COMPRESSION WORKER] started, blocking on rx.recv()");
 
     while let Ok(mut seg) = rx.recv() {
+        eprintln!("[COMPRESSION WORKER] received segment {} at {:?}", 
+                  seg.segment_index, std::time::Instant::now());
+
         let mut stage_times = StageTimes::default();
         // Compression / segment
         let start = Instant::now();
@@ -73,6 +77,11 @@ pub fn run_compression_worker(
         let mut sched = scheduler.lock().unwrap();
         sched.complete(target);
     }
+
+    eprintln!("[COMPRESSION WORKER] rx.recv() returned Err (channel closed), exiting");
+    drop(tx); // Explicit drop for clarity
+    eprintln!("[COMPRESSION WORKER] tx dropped");
+
 }
 
 /// Single decompression worker loop
@@ -93,8 +102,8 @@ pub fn run_decompression_worker(
         };
 
         // ✅ Catch final empty segment before decompression
-        if seg.header.flags.contains(SegmentFlags::FINAL_SEGMENT) && seg.bytes.is_empty() {
-            eprintln!("[DECOMPRESSION] final empty segment {} bypassed", seg.header.segment_index);
+        if seg.header.flags().contains(SegmentFlags::FINAL_SEGMENT) && seg.bytes.is_empty() {
+            eprintln!("[DECOMPRESSION] final empty segment {} bypassed", seg.header.segment_index());
             stage_times.add(Stage::Decompress, start.elapsed());
             seg.stage_times = stage_times;
 

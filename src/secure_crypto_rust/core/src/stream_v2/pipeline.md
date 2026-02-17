@@ -451,3 +451,36 @@ if let Ok(err) = err_rx.try_recv() {
     // update bytes_plaintext
     counters.bytes_plaintext += segment.bytes.len() as u64;
 ```
+
+---
+
+
+```rust
+thread::scope(|scope| {
+    // Monitor thread
+    let monitor_handle = scope.spawn(move || -> Result<(), StreamError> {
+        if let Ok(err) = fatal_rx.recv() {
+            eprintln!("[FATAL] error detected: {err}");
+            cancelled.store(true, Ordering::Relaxed);
+            
+            // Drop channels to unblock workers
+            drop(comp_tx_m);
+            drop(seg_tx_clean_m);
+            drop(out_tx_m);
+            
+            // Return the error from monitor thread
+            return Err(err);
+        }
+        Ok(())
+    });
+
+    // ... spawn other threads ...
+
+    // Writer loop...
+
+    // After writer loop, check monitor result
+    monitor_handle.join().unwrap()?; // Propagate error if monitor caught one
+
+    Ok::<(), StreamError>(())
+})?; // Propagate error from scope
+```

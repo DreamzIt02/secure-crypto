@@ -484,7 +484,7 @@ pub enum CodecError {
     UnknownCompression { raw: u16 },
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum CompressionError {
     UnsupportedCodec { codec_id: u16 },
     InvalidDictionary { dict_id: u32 },

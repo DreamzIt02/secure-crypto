@@ -5,7 +5,7 @@ use crate::stream_v2::framing::types::{FrameError, FrameType};
 use crate::crypto::types::{CryptoError, NonceError, AadError};
 use crate::telemetry::StageTimes;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum FrameWorkerError {
     InvalidInput(String),
     CryptoFailure(String),
