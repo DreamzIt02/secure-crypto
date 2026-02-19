@@ -2,11 +2,11 @@
 
 #[cfg(test)]
 mod tests {
-    use crypto_core::{compression::CompressionCodec, headers::{AadDomain, AlgProfile, CipherSuite, HeaderV1, HkdfPrf, Strategy}, stream_v2::{InputSource, OutputSink, core::{ApiConfig, DecryptParams, EncryptParams}, decrypt_stream_v2, encrypt_stream_v2, framing::FrameHeader, segmenting::SegmentHeader}, types::StreamError};
+    use crypto_core::{compression::CompressionCodec, headers::{AadDomain, AlgProfile, CipherSuite, HeaderV1, HkdfPrf, Strategy}, stream_v2::{InputSource, OutputSink, core::{ApiConfig, DecryptParams, EncryptParams, MasterKey}, decrypt_stream_v2, encrypt_stream_v2, framing::FrameHeader, segmenting::SegmentHeader}, types::StreamError};
     use std::{io::{Read, Write}, sync::atomic::{AtomicUsize, Ordering}};
 
-    fn dummy_master_key() -> Vec<u8> {
-        vec![0x11; 32] // 256‑bit dummy key
+    fn dummy_master_key() -> MasterKey {
+        MasterKey::new(vec![0x11; 32]) // 256‑bit dummy key
     }
 
     fn dummy_header() -> HeaderV1 {
@@ -226,7 +226,7 @@ mod tests {
         // This test simulates a frame encryption error by using an invalid configuration
         // that will cause the AEAD encryption to fail
         
-        let master_key = vec![0u8; 32]; // Invalid/weak key
+        let master_key = MasterKey::new(vec![0u8; 32]); // Invalid/weak key
         let mut header = dummy_header();
         
         // Corrupt the header to cause AEAD initialization to fail

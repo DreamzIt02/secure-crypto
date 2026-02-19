@@ -135,3 +135,62 @@ types.rs, utils.rs
    ↑
 headers     →     compression
 ```
+
+---
+
+### 🔐 Cipher Choice: AES‑GCM vs. ChaCha20‑Poly1305
+
+| Cipher                | Strengths                                                                                                                             | Best Use Cases                                                                |
+|-----------------------|---------------------------------------------------------------------------------------------------------------------------------------|-------------------------------------------------------------------------------|
+| **AES‑256‑GCM**       | Industry standard, widely audited, hardware acceleration (AES‑NI) on Intel/AMD CPUs.                                                  | Data centers, servers, desktops with AES‑NI.                                  |
+| **ChaCha20‑Poly1305** | Stream cipher, designed for speed and side‑channel resistance in software. Performs better on CPUs without AES‑NI (mobile, embedded). | Mobile devices, mixed fleets, environments lacking AES hardware acceleration. |
+
+---
+
+### 🔑 HKDF PRF Choice
+
+| PRF                   | Notes                                                                                |
+|-----------------------|--------------------------------------------------------------------------------------|
+| **SHA‑256 / SHA‑512** | Standard, widely supported, strong security.                                         |
+| **SHA‑3 family**      | Newer standard, slower in software, less common in HKDF usage.                       |
+| **BLAKE3**            | Very fast, modern, parallelizable, secure. Excellent for high‑performance pipelines. |
+
+---
+
+### 📦 Recommended Profiles
+
+- **If targeting Intel/AMD servers with AES‑NI**:  
+  `AlgProfile::Aes256GcmHkdfBlake3K` (AES‑256‑GCM + HKDF‑BLAKE3).  
+- **If targeting mixed environments (desktop + mobile, ARM)**:  
+  `AlgProfile::Chacha20Poly1305HkdfBlake3K` (ChaCha20‑Poly1305 + HKDF‑BLAKE3).  
+
+---
+
+### 🔐 Cipher Suite
+
+| Cipher                | Strengths                                                                               | Best Choice When                                |
+|-----------------------|-----------------------------------------------------------------------------------------|-------------------------------------------------|
+| **AES‑256‑GCM**       | Industry standard, widely audited, hardware acceleration (AES‑NI) on Intel/AMD CPUs.    | Running on desktops/servers with AES‑NI.        |
+| **ChaCha20‑Poly1305** | Fast in pure software, side‑channel resistant, consistent performance across platforms. | Running on ARM/mobile devices, or mixed fleets without AES‑NI. |
+
+---
+
+### 🔑 HKDF PRF
+
+| PRF                   | Strengths                                                      | Best Choice When                                                  |
+|-----------------------|----------------------------------------------------------------|-------------------------------------------------------------------|
+| **SHA‑256 / SHA‑512** | Conservative, widely supported, compliance‑friendly.           | Environments requiring FIPS/NIST compliance.                      |
+| **SHA‑3 family**      | Newer standard, slower in practice, less common in HKDF usage. | Rarely chosen unless mandated by policy.                          |
+| **BLAKE3**            | Extremely fast, parallelizable, modern design, secure.         | Performance‑critical pipelines, especially with parallel workers. |
+
+---
+
+### 📦 Recommended Profiles (1)
+
+| Environment                       | Recommended AlgProfile        | Cipher            | HKDF PRF |
+|-----------------------------------|-------------------------------|-------------------|----------|
+| **Intel/AMD servers with AES‑NI** | `Aes256GcmHkdfBlake3K`        | AES‑256‑GCM       | BLAKE3   |
+| **Mobile/ARM or mixed fleet**     | `Chacha20Poly1305HkdfBlake3K` | ChaCha20‑Poly1305 | BLAKE3   |
+| **Compliance‑driven (FIPS/NIST)** | `Aes256GcmHkdfSha256`         | AES‑256‑GCM       | SHA‑256  |
+
+---

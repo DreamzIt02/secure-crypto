@@ -317,9 +317,8 @@ impl DecryptFrameWorker1 {
         rx: Receiver<Bytes>,
         tx: Sender<Result<DecryptedFrame, FrameWorkerError>>,
     ) {
-       // Remove thread::spawn - we're already spawned in run_v2
+        // Remove thread::spawn - we're already spawned in run_v2
         // std::thread::spawn(move || {
-
             loop {
                 // Check for cancellation before blocking on receive
                 if self.cancelled.load(Ordering::Relaxed) {

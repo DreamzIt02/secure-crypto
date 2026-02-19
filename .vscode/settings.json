@@ -6,6 +6,7 @@
         "Bitmask",
         "byteorder",
         "Chacha",
+        "chrono",
         "ciphertext",
         "ciphertexts",
         "cpus",

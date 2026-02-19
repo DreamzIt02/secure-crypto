@@ -99,7 +99,7 @@ pub enum CryptoError {
     UnsupportedPrf { prf_id: u16 },
 
     /// Invalid key length provided to cipher.
-    InvalidKeyLen { expected: usize, actual: usize },
+    InvalidKeyLen { expected: &'static [usize], actual: usize },
 
     /// Nonce length mismatch (must be 12 bytes for supported ciphers).
     InvalidNonceLen { expected: usize, actual: usize },
@@ -124,7 +124,12 @@ impl fmt::Display for CryptoError {
                 write!(f, "unsupported HKDF PRF: {}",
                        enum_name_or_hex::<HkdfPrf>(*prf_id)),
             InvalidKeyLen { expected, actual } =>
-                write!(f, "invalid key length: expected={}, actual={}", expected, actual),
+                write!(
+                    f,
+                    "invalid key length: expected one of {:?}, actual={}",
+                    expected,
+                    actual
+                ),
             InvalidNonceLen { expected, actual } =>
                 write!(f, "invalid nonce length: expected={}, actual={}", expected, actual),
             TagMismatch =>

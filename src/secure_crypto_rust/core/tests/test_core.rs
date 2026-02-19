@@ -5,11 +5,11 @@ mod tests {
         headers::HeaderV1, 
         stream_v2::{
             InputSource, OutputSink, 
-            core::{ApiConfig, DecryptParams, EncryptParams, decrypt_stream_v2, encrypt_stream_v2, validate_decrypt_params, validate_dictionary, validate_encrypt_params}, 
+            core::{ApiConfig, DecryptParams, EncryptParams, MasterKey, decrypt_stream_v2, encrypt_stream_v2, validate_decrypt_params, validate_dictionary, validate_encrypt_params}, 
     }};
 
-    fn dummy_master_key() -> Vec<u8> {
-        vec![0x11u8; 32] // valid 32-byte key
+    fn dummy_master_key() -> MasterKey {
+        MasterKey::new(vec![0x11u8; 32]) // valid 32-byte key
     }
 
     fn dummy_header() -> HeaderV1 {
@@ -38,7 +38,7 @@ mod tests {
             header: dummy_header(),
             dict: None,
         };
-        let bad_key = vec![0x22u8; 15]; // invalid length
+        let bad_key = MasterKey::new(vec![0x22u8; 15]); // invalid length
         let result = validate_encrypt_params(&bad_key, &params, None, None);
         assert!(result.is_err(), "Expected invalid master key length error");
     }
@@ -145,7 +145,7 @@ mod tests {
 
     #[test]
     fn encrypt_stream_with_invalid_key_should_fail() {
-        let bad_key = vec![0x33u8; 15]; // invalid length
+        let bad_key = MasterKey::new(vec![0x33u8; 15]); // invalid length
         let header = dummy_header();
         let params = EncryptParams { header, dict: None };
         let config = ApiConfig::new(Some(false), None, None, None );
@@ -160,7 +160,7 @@ mod tests {
 
     #[test]
     fn decrypt_stream_with_invalid_key_should_fail() {
-        let bad_key = vec![0x33u8; 16]; // invalid length
+        let bad_key = MasterKey::new(vec![0x33u8; 16]); // invalid length
         let input = InputSource::Memory(vec![0x99u8; 128]);
         let output = OutputSink::Memory;
         let config = ApiConfig::new(Some(false), None, None, None );

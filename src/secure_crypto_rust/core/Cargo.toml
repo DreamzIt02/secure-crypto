@@ -85,6 +85,11 @@ wgpu.workspace = true
 sysinfo.workspace = true
 base64.workspace = true
 tempfile.workspace = true
+uuid.workspace = true
+async-stream.workspace = true
+async-trait.workspace = true
+tokio.workspace = true
+paste.workspace = true
 
 # ---------------------------------------------------------------------------
 # Dev & test dependencies (FAST)
@@ -92,6 +97,18 @@ tempfile.workspace = true
 [dev-dependencies]
 criterion = "0.5"
 proptest.workspace = true
+
+[[bin]]
+name = "bench_v2_memory"
+path = "examples/bench_v2_memory.rs"
+
+[[bin]]
+name = "bench_v2_file"
+path = "examples/bench_v2_file.rs"
+
+[[bin]]
+name = "bench_v2_reader"
+path = "examples/bench_v2_reader.rs"
 
 [[test]]
 name = "public_api"
@@ -123,6 +140,31 @@ path = "tests/public_api/test_telemetry_config.rs"
 [[test]]
 name = "test_compression_cipher_variants"
 path = "tests/public_api/test_compression_cipher_variants.rs"
+
+
+[[bench]]
+name = "bench_dummy"
+harness = false
+
+[[bench]]
+name = "bench_io_throughput"
+harness = false
+
+[[bench]]
+name = "bench_parallelism"
+harness = false
+
+[[bench]]
+name = "bench_segment_sizes"
+harness = false
+
+[[bench]]
+name = "bench_digest_variants"
+harness = false
+
+[[bench]]
+name = "bench_v2_memory"
+harness = false
 
 # ---------------------------------------------------------------------------
 # Build profiles (inherit from workspace)

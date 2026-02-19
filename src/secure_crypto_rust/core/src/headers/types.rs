@@ -146,7 +146,7 @@ pub struct HeaderV1 {
     pub strategy: u16,         // sequential / parallel / auto
     pub aad_domain: u16,       // binds header semantics in AAD
     pub flags: u16,            // presence and behavior bits
-    pub chunk_size: u32,       // frame plaintext target size
+    pub chunk_size: u32,       // frame plaintext split target size
     pub plaintext_size: u64,   // optional; 0 if unknown
     pub crc32: u32,            // optional; 0 if not provided
     pub dict_id: u32,          // optional compression dictionary id
@@ -170,9 +170,9 @@ impl Default for HeaderV1 {
         Self {
             magic: MAGIC_RSE1,
             version: HEADER_V1,
-            alg_profile: AlgProfile::Chacha20Poly1305HkdfSha256 as u16,
-            cipher: CipherSuite::Chacha20Poly1305 as u16,
-            hkdf_prf: HkdfPrf::Sha256 as u16,
+            alg_profile: AlgProfile::Aes256GcmHkdfSha256 as u16,
+            cipher: CipherSuite::Aes256Gcm as u16,
+            hkdf_prf: HkdfPrf::Blake3K as u16,
             compression: CompressionCodec::Auto as u16,
             strategy: Strategy::Auto as u16,
             aad_domain: AadDomain::Generic as u16,
@@ -209,11 +209,11 @@ impl HeaderV1 {
         Self {
             magic: MAGIC_RSE1,
             version: HEADER_V1,
-            alg_profile: AlgProfile::Chacha20Poly1305HkdfSha256 as u16,
+            alg_profile: AlgProfile::Chacha20Poly1305HkdfBlake3K as u16,
             cipher: CipherSuite::Chacha20Poly1305 as u16,
-            hkdf_prf: HkdfPrf::Sha256 as u16,
-            compression: CompressionCodec::Deflate as u16,
-            strategy: Strategy::Auto as u16,
+            hkdf_prf: HkdfPrf::Blake3K as u16,
+            compression: CompressionCodec::Zstd as u16,
+            strategy: Strategy::Parallel as u16,
             aad_domain: AadDomain::Generic as u16,
             flags: 0,
             chunk_size: DEFAULT_CHUNK_SIZE as u32,

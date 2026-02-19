@@ -177,9 +177,10 @@ impl EncryptSegmentWorker0 {
                     }
                 };
 
+                let segment_idx = segment.segment_index;
                 eprintln!(
                     "[ENCRYPT SEGMENT WORKER] processing segment {}",
-                    segment.segment_index
+                    segment_idx
                 );
 
                 // Process the segment (splits into frames, encrypts, digests)
@@ -206,6 +207,8 @@ impl EncryptSegmentWorker0 {
                             cancelled.store(true, Ordering::Relaxed);
                             break;
                         }
+                        // Append log for successfully encrypted segment
+                        self.log_manager.console(("[ENCRYPT SEGMENT]: ".to_string() + &segment_idx.to_string() + " successfully encrypted").into());
                     }
                     Err(e) => {
                         // Segment processing failed - this is a fatal error
@@ -283,6 +286,7 @@ impl EncryptSegmentWorker1 {
         let fatal_tx = self.fatal_tx.clone();
         let cancelled = self.cancelled.clone();
 
+        // Remove thread::spawn - we're already spawned in pipeline
         // std::thread::spawn(move || {
             // ---- Initialize frame worker pool ----
             let worker_count = crypto.base.profile.cpu_workers();
@@ -334,9 +338,10 @@ impl EncryptSegmentWorker1 {
                     }
                 };
 
+                let segment_idx = segment.segment_index;
                 eprintln!(
                     "[ENCRYPT SEGMENT WORKER] processing segment {}",
-                    segment.segment_index
+                    segment_idx
                 );
 
                 // Process the segment (splits into frames, encrypts, digests)
@@ -363,6 +368,8 @@ impl EncryptSegmentWorker1 {
                             cancelled.store(true, Ordering::Relaxed);
                             break;
                         }
+                        // Append log for successfully encrypted segment
+                        self.log_manager.console(("[ENCRYPT SEGMENT]: ".to_string() + &segment_idx.to_string() + " successfully encrypted").into());
                     }
                     Err(e) => {
                         // Segment processing failed - this is a fatal error

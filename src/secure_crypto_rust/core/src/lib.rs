@@ -22,6 +22,9 @@ pub mod scheduler;
 // Stream layers
 pub mod stream_v2;
 
+// Benchmark shared
+pub mod benchmarks;
+
 // -----------------------------------------------------------------------------
 // Prelude (Rust users)
 // -----------------------------------------------------------------------------

@@ -297,6 +297,7 @@ impl EncryptFrameWorker1 {
         rx: Receiver<FrameInput>,
         tx: Sender<Result<EncryptedFrame, FrameWorkerError>>,
     ) {
+        // Remove thread::spawn - we're already spawned in run_v2
         // std::thread::spawn(move || {
             loop {
                 // Check for cancellation before blocking on receive

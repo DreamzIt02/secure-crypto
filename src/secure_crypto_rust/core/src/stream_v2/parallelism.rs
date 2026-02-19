@@ -47,6 +47,19 @@ pub fn detect_gpu_info() -> GpuInfo {
         }
     }
 
+    // Vulkan/Metal/DX via wgpu
+    let adapters = pollster::block_on(detect_wgpu_count());
+    if adapters > 0 {
+        eprintln!("[GPU DETECT] wgpu adapters found: {}", adapters);
+        // wgpu::Adapter doesn’t expose names directly without async device creation,
+        // so we can leave names empty or fill with placeholders.
+        return GpuInfo {
+            count: adapters,
+            backend: GpuBackend::Wgpu,
+            device_names: Vec::new(),
+        };
+    }
+    
     // OpenCL
     let mut names = Vec::new();
     let cl_count = {
@@ -66,19 +79,6 @@ pub fn detect_gpu_info() -> GpuInfo {
             count: cl_count,
             backend: GpuBackend::OpenCL,
             device_names: names,
-        };
-    }
-
-    // Vulkan/Metal/DX via wgpu
-    let adapters = pollster::block_on(detect_wgpu_count());
-    if adapters > 0 {
-        eprintln!("[GPU DETECT] wgpu adapters found: {}", adapters);
-        // wgpu::Adapter doesn’t expose names directly without async device creation,
-        // so we can leave names empty or fill with placeholders.
-        return GpuInfo {
-            count: adapters,
-            backend: GpuBackend::Wgpu,
-            device_names: Vec::new(),
         };
     }
 

@@ -1,10 +1,10 @@
 // ## 🧪 Test File: `secure_crypto_rust/core/tests/public_api/test_roundtrip.rs`
 #[cfg(test)]
 mod tests {
-    use crypto_core::{compression::CompressionCodec, headers::{AadDomain, AlgProfile, CipherSuite, HeaderV1, HkdfPrf, Strategy}, stream_v2::{InputSource, OutputSink, core::{ApiConfig, DecryptParams, EncryptParams}, decrypt_stream_v2, encrypt_stream_v2}, types::StreamError};
+    use crypto_core::{compression::CompressionCodec, headers::{AadDomain, AlgProfile, CipherSuite, HeaderV1, HkdfPrf, Strategy}, stream_v2::{InputSource, OutputSink, core::{ApiConfig, DecryptParams, EncryptParams, MasterKey}, decrypt_stream_v2, encrypt_stream_v2}, types::StreamError};
 
-    fn dummy_master_key() -> Vec<u8> {
-        vec![0x11; 32] // 256‑bit dummy key
+    fn dummy_master_key() -> MasterKey {
+        MasterKey::new(vec![0x11; 32]) // 256‑bit dummy key
     }
 
     fn dummy_header() -> HeaderV1 {

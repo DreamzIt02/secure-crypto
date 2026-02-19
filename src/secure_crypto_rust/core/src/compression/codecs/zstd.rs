@@ -56,7 +56,7 @@ impl ZstdCompressor {
 impl Compressor for ZstdCompressor {
     fn compress_chunk(&mut self, input: &[u8], out: &mut Vec<u8>) -> Result<(), CompressionError> {
         // Compress the input
-        let compressed = zstd::bulk::compress(input, 0)
+        let compressed = zstd::bulk::compress(input, 6)
             .map_err(|e| CompressionError::CodecProcessFailed { codec: "zstd".into(), msg: e.to_string() })?;
 
         // Prefix with original plaintext length (like lz4_flex does)

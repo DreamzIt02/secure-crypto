@@ -2,6 +2,7 @@ use std::fmt;
 use std::convert::{From};
 use bytes::Bytes;
 
+use crate::constants::MASTER_KEY_LENGTHS;
 use crate::crypto::{CryptoError, DigestAlg, DigestError, KEY_LEN_32};
 use crate::headers::types::HeaderV1;
 use crate::stream_v2::framing::{FrameError};
@@ -103,7 +104,7 @@ impl CryptoContextBase {
     ) -> Result<Self, SegmentWorkerError> {
         if session_key.len() != KEY_LEN_32 {
             return Err(SegmentWorkerError::CryptoError(
-                CryptoError::InvalidKeyLen { expected: KEY_LEN_32, actual: session_key.len() }
+                CryptoError::InvalidKeyLen { expected: &MASTER_KEY_LENGTHS, actual: session_key.len() }
             ));
         }
 

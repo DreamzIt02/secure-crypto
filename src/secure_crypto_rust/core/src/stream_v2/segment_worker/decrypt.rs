@@ -199,9 +199,10 @@ impl DecryptSegmentWorker0 {
                     }
                 };
 
+                let segment_idx = segment.header.segment_index();
                 eprintln!(
                     "[DECRYPT SEGMENT WORKER] processing segment {}",
-                    segment.header.segment_index()
+                    segment_idx
                 );
 
                 // Validate segment header before processing
@@ -230,6 +231,8 @@ impl DecryptSegmentWorker0 {
                                     cancelled.store(true, Ordering::Relaxed);
                                     break;
                                 }
+                                // Append log for successfully decrypted segment
+                                self.log_manager.console(("[DECRYPT SEGMENT]: ".to_string() + &segment_idx.to_string() + " successfully decrypted").into());
                             }
                             Err(e) => {
                                 // Segment processing failed - this is a fatal error
@@ -382,11 +385,11 @@ impl DecryptSegmentWorker1 {
                     }
                 };
 
+                let segment_idx = segment.header.segment_index();
                 eprintln!(
                     "[DECRYPT SEGMENT WORKER] processing segment {}",
-                    segment.header.segment_index()
+                    segment_idx
                 );
-
                 // Validate segment header before processing
                 match segment.header.validate(&segment.wire) {
                     Ok(()) => {
@@ -413,6 +416,8 @@ impl DecryptSegmentWorker1 {
                                     cancelled.store(true, Ordering::Relaxed);
                                     break;
                                 }
+                                // Append log for successfully decrypted segment
+                                self.log_manager.console(("[DECRYPT SEGMENT]: ".to_string() + &segment_idx.to_string() + " successfully decrypted").into());
                             }
                             Err(e) => {
                                 // Segment processing failed - this is a fatal error
@@ -759,7 +764,7 @@ pub fn process_decrypt_segment_1(
     let total_plaintext_len: usize = data_frames.iter().map(|f| f.plaintext.len()).sum();
     let mut plaintext_out = Vec::with_capacity(total_plaintext_len);
 
-    // Concatenate all data frame plaintexts in order
+    // Concatenate all data frame plaintext in order
     for frame in data_frames {
         plaintext_out.extend_from_slice(&frame.plaintext);
     }

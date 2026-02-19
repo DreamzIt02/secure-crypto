@@ -17,6 +17,8 @@ src/secure_crypto_rust/**/*.log
 .DS_Store
 
 # tests
+src/**/results_v2/*
+src/**/*.dat
 
 # Unfinished docs
 **/*/*-raw.md

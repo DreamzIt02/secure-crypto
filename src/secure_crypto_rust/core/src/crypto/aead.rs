@@ -9,7 +9,7 @@
 //! - Caller provides nonce and AAD (built by aad module) per frame.
 //! - Cipher selection is driven by header.cipher (u16 registry).
 
-use crate::constants::{cipher_ids};
+use crate::constants::{MASTER_KEY_LENGTHS, cipher_ids};
 use crate::headers::types::{HeaderV1};
 use crate::crypto::types::{KEY_LEN_32, NONCE_LEN_12, TAG_LEN};
 use crate::crypto::types::{CryptoError};
@@ -33,7 +33,7 @@ impl AeadImpl {
     pub fn from_header_and_key(header: &HeaderV1, session_key: &[u8]) -> Result<Self, CryptoError> {
         if session_key.len() != KEY_LEN_32 {
             return Err(CryptoError::InvalidKeyLen {
-                expected: KEY_LEN_32,
+                expected: &MASTER_KEY_LENGTHS,
                 actual: session_key.len(),
             });
         }
@@ -42,7 +42,7 @@ impl AeadImpl {
             x if x == cipher_ids::AES256_GCM => {
                 let cipher = Aes256Gcm::new_from_slice(session_key)
                     .map_err(|_| CryptoError::InvalidKeyLen {
-                        expected: KEY_LEN_32,
+                        expected: &MASTER_KEY_LENGTHS,
                         actual: session_key.len(),
                     })?;
                 Ok(Self::AesGcm(cipher))
@@ -50,7 +50,7 @@ impl AeadImpl {
             x if x == cipher_ids::CHACHA20_POLY1305 => {
                 let cipher = ChaCha20Poly1305::new_from_slice(session_key)
                     .map_err(|_| CryptoError::InvalidKeyLen {
-                        expected: KEY_LEN_32,
+                        expected: &MASTER_KEY_LENGTHS,
                         actual: session_key.len(),
                     })?;
                 Ok(Self::ChaCha(cipher))

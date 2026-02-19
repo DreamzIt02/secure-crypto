@@ -159,6 +159,9 @@ impl AsyncLogManager {
         Ok(Self { tx })
     }
 
+    pub fn console(&self, message: String) {
+        eprintln!("{}", message);
+    }
     /// Non-blocking append. Sends entry to background thread.
     pub fn append(&self, entry: UnifiedEntry) {
         if let Err(e) = self.tx.send(LogCommand::Append(entry)) {

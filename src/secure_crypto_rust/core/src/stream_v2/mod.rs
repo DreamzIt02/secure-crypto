@@ -24,6 +24,12 @@ pub use io::{
 };
 
 pub use core::{
+    EncryptParams,
+    DecryptParams,
+    ApiConfig,
+};
+
+pub use core::{
     encrypt_stream_v2,
     decrypt_stream_v2,
 };

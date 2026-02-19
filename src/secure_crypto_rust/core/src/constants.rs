@@ -14,7 +14,7 @@ pub const MIN_DICT_LEN: usize = 8;
 pub const MAX_DICT_LEN: usize = 1 << 20; // 1 MiB cap for sanity
 
 /// Industry-standard master key lengths (AES-128, AES-192, AES-256)
-pub const MASTER_KEY_LENGTHS: &[usize] = &[16, 24, 32];
+pub const MASTER_KEY_LENGTHS: [usize; 3] = [16, 24, 32];
 
 // ### 📊 Comparison table
 

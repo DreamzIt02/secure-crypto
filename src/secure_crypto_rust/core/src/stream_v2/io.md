@@ -277,3 +277,60 @@ if let Some(buf) = maybe_buf {
 - This makes round‑trip tests cleaner: we can assert on the buffer contents immediately after the pipeline finishes.
 
 ---
+
+## 📥 InputSource Variants
+
+- **Reader(Box<dyn Read + Send>)**
+  - Wraps any type that implements `Read` (e.g., network streams, stdin, compressed streams).
+  - Flexible: can handle arbitrary sources as long as they implement `Read`.
+  - Useful when we want polymorphism and don’t care about the concrete type.
+
+- **File(PathBuf)**
+  - Represents a file path on disk.
+  - We’ll open the file later to read its contents.
+  - More concrete than `Reader`, tied directly to filesystem.
+
+- **Memory(`Vec<u8>`)**
+  - Data is already loaded into memory as a byte vector.
+  - Fast access, no I/O overhead.
+  - Best for small or preloaded datasets.
+
+---
+
+## 📤 OutputSink Variants
+
+- **Writer(Box<dyn Write + Send>)**
+  - Wraps any type that implements `Write` (e.g., network sockets, stdout, compressed writers).
+  - Flexible: can write to arbitrary destinations.
+  - Ideal when we want polymorphism and don’t care about the concrete type.
+
+- **File(PathBuf)**
+  - Represents a file path on disk.
+  - We’ll open/create the file later to write into it.
+  - Concrete, tied directly to filesystem.
+
+- **Memory**
+  - Collects output into an in-memory buffer (likely `Vec<u8>` internally).
+  - Fast, avoids disk/network I/O.
+  - Useful for testing, temporary results, or when we need the output as a byte array.
+
+---
+
+## 🔑 Key Differences
+
+| Abstraction     | Purpose | Flexibility              | Performance       | Typical Use Case          |
+|-----------------|---------|--------------------------|-------------------|---------------------------|
+| Reader          | Input   | High (any `Read`)        | Depends on source | Streams, stdin, sockets   |
+| File (Input)    | Input   | Medium (filesystem only) | Disk-bound        | Reading files             |
+| Memory (Input)  | Input   | Low (fixed data)         | Fast              | Preloaded data            |
+| Writer          | Output  | High (any `Write`)       | Depends on sink   | Streams, stdout, sockets  |
+| File (Output)   | Output  | Medium (filesystem only) | Disk-bound        | Writing files             |
+| Memory (Output) | Output  | Low (in-memory only)     | Fast              | Testing, capturing output |
+
+---
+
+In short:  
+
+- **Reader/Writer** = polymorphic, trait-based, flexible.  
+- **File** = concrete, filesystem-bound.  
+- **Memory** = in-memory, fast, good for testing or temporary data.  
