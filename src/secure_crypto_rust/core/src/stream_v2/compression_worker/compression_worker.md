@@ -81,7 +81,7 @@ pub fn run_compression_worker(
 
 ## 🔧 Step 5: Pipeline wiring
 
-In `run_encrypt_pipeline`:
+In `encrypt_pipeline`:
 
 ```rust
 let scheduler = Arc::new(Mutex::new(Scheduler::new(

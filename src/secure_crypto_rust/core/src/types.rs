@@ -1,4 +1,3 @@
-use std::io;
 use crossbeam::channel::Sender;
 
 use crate::{
@@ -15,8 +14,9 @@ use crate::{
 #[derive(Debug, Clone)]
 pub enum StreamError {
     /// I/O error (wrapped as string to avoid OS-specific types at FFI boundary).
-    // Io(io::Error),
     Io(String),
+    /// I/O error with explicit kind + message.
+    IoError(std::io::ErrorKind, String),
 
     /// Aad-level error (validation or parse).
     Aad(AadError),
@@ -48,20 +48,34 @@ pub enum StreamError {
     /// Nonce derivation error (policy or calculation failure).
     Nonce(NonceError),
 
-
     /// Pipeline error for pipelining Segment
     PipelineError(&'static str),
 
+    /// Channel send failure (downstream closed).
+    ChannelSend,
+
+    /// Channel receive failure (upstream closed).
+    ChannelRecv,
+
+    /// Thread panic during worker execution.
+    ThreadPanic,
+
     /// Generic high-level validation with a descriptive message.
     Validation(String),
+    FormatError(String),
 }
 
 impl std::fmt::Display for StreamError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             StreamError::Io(e) => write!(f, "I/O error: {}", e),
+            StreamError::IoError(kind, msg) => { write!(f, "I/O error ({:?}): {}", kind, msg) }
             StreamError::PipelineError(msg) => write!(f, "pipeline error: {}", msg),
             
+            StreamError::ChannelSend => write!(f, "channel send error"),
+            StreamError::ChannelRecv => write!(f, "channel receive error"),
+            StreamError::ThreadPanic => write!(f, "thread panic"),
+
             StreamError::Aad(e) => write!(f, "aad error: {}", e),
             StreamError::Header(e) => write!(f, "header error: {}", e),
             StreamError::SegmentWorker(e) => write!(f, "segment worker error: {}", e),
@@ -74,16 +88,18 @@ impl std::fmt::Display for StreamError {
             StreamError::Nonce(e) => write!(f, "nonce error: {}", e),
 
             StreamError::Validation(msg) => write!(f, "validation error: {}", msg),
+            StreamError::FormatError(msg) => write!(f, "{}", msg),
         }
     }
 }
 
 impl std::error::Error for StreamError {}
 
-impl From<io::Error> for StreamError {
-    fn from(e: io::Error) -> Self {
+impl From<std::io::Error> for StreamError {
+    fn from(e: std::io::Error) -> Self {
         // Treat I/O during parse as validation of external input
-        StreamError::Io(e.to_string())
+        eprintln!("[StreamError] Converting io::Error: kind={:?}, msg={}", e.kind(), e);
+        StreamError::IoError(e.kind(), e.to_string())
     }
 }
 

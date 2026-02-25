@@ -27,6 +27,7 @@ pub use core::{
     EncryptParams,
     DecryptParams,
     ApiConfig,
+    MasterKey
 };
 
 pub use core::{

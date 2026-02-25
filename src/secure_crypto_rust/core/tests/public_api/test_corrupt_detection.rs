@@ -94,26 +94,26 @@ mod tests {
         
         // This test is tricky because we need to inject an error mid-stream
         // Let's test with a writer that fails after segment 4
-        
         struct FailingWriter {
             inner: Vec<u8>,
-            segments_written: AtomicUsize,
         }
-        
+
         impl Write for FailingWriter {
             fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-                // Detect segment boundaries by looking for SegmentHeader magic or just count writes
-                if buf.len() > 0 {
-                    let count = self.segments_written.fetch_add(1, Ordering::SeqCst);
-                    if count >= 5 {
-                        return Err(std::io::Error::new(
-                            std::io::ErrorKind::Other,
-                            "Injected error at segment 5"
-                        ));
+                // Only attempt to parse if we have enough bytes for a header
+                if buf.len() >= SegmentHeader::LEN {
+                    if let Ok(header) = SegmentHeader::from_bytes(&buf[..SegmentHeader::LEN]) {
+                        if header.segment_index() == 5 {
+                            return Err(std::io::Error::new(
+                                std::io::ErrorKind::Other,
+                                "Injected error at segment 5",
+                            ));
+                        }
                     }
                 }
                 self.inner.write(buf)
             }
+
             fn flush(&mut self) -> std::io::Result<()> {
                 self.inner.flush()
             }
@@ -122,7 +122,7 @@ mod tests {
         let reader = std::io::Cursor::new(plaintext);
         let writer = FailingWriter {
             inner: Vec::new(),
-            segments_written: AtomicUsize::new(0),
+            // segments_written: AtomicUsize::new(0),
         };
 
         let result = encrypt_stream_v2(
@@ -141,7 +141,7 @@ mod tests {
         
         // Verify it's an IO error from our injected failure
         match err {
-            StreamError::Io(_) => {
+            StreamError::IoError(_, _) => {
                 println!("✓ Correct error type: IO error from writer");
             }
             other => panic!("Expected IO error, got: {:?}", other),

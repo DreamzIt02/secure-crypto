@@ -22,7 +22,7 @@ mod tests {
             frame_type: FrameType::Digest,
             segment_index: 0,
             frame_index: 0,
-            plaintext: Bytes::from(digest_plaintext),
+            payload: Bytes::from(digest_plaintext),
         }
     }
     #[test]
@@ -63,7 +63,7 @@ mod tests {
             frame_type: FrameType::Digest,
             segment_index: 0,
             frame_index: 0,
-            plaintext: Bytes::from(vec![0x01, 0x02]), // only 2 bytes
+            payload: Bytes::from(vec![0x01, 0x02]), // only 2 bytes
         };
         let err = frame.validate().unwrap_err();
         assert!(matches!(err, FrameWorkerError::InvalidInput(msg) if msg.contains("too short")));
@@ -80,9 +80,9 @@ mod tests {
             frame_type: FrameType::Digest,
             segment_index: 0,
             frame_index: 0,
-            plaintext: Bytes::from(buf),
+            payload: Bytes::from(buf),
         };
-        let err = DigestFrame::decode(&frame.plaintext).unwrap_err();
+        let err = DigestFrame::decode(&frame.payload).unwrap_err();
         assert!(matches!(
             err,
             DigestError::InvalidLength { .. }
@@ -100,9 +100,9 @@ mod tests {
             frame_type: FrameType::Digest,
             segment_index: 0,
             frame_index: 0,
-            plaintext: Bytes::from(buf),
+            payload: Bytes::from(buf),
         };
-        let err = DigestFrame::decode(&frame.plaintext).unwrap_err();
+        let err = DigestFrame::decode(&frame.payload).unwrap_err();
          assert!(matches!(
             err,
             DigestError::UnknownAlgorithm { .. }

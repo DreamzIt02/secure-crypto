@@ -6,15 +6,16 @@ use sha2::{Digest as _, Sha256, Sha512};
 use sha3::{Sha3_256, Sha3_512};
 use blake3;
 
-use crate::utils::enum_name_or_hex;
+use crate::utils::{enum_name_or_hex, to_hex};
 
 /// Digest-related errors.
 #[derive(Debug, Clone)]
 pub enum DigestError {
     UnknownAlgorithm { raw: u16 },
-    DigestMismatch,
     InvalidFormat,
     InvalidLength { have: usize, need: usize },
+    DigestMismatch { have: Vec<u8>, need: Vec<u8> },
+    AlreadyFinalized,
 }
 impl fmt::Display for DigestError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -23,10 +24,13 @@ impl fmt::Display for DigestError {
             UnknownAlgorithm { raw } =>
                 write!(f, "unknown algorithm: {}",
                     enum_name_or_hex::<DigestAlg>(*raw)),
-            DigestMismatch => write!(f, "invalid header: {}", "Invalid frame header"),
             InvalidFormat => write!(f, "invalid header: {}", "Invalid frame header"),
             InvalidLength { have, need } =>
                 write!(f, "digest buffer too short: {} < {}", have, need),
+            DigestMismatch { have, need } =>
+                write!(f, "digest mismatch: {}, expected: {}", to_hex(have), to_hex(need)),
+
+            AlreadyFinalized => write!(f, "digest verified once: {}", "Invalid digest for frame"),
         }
     }
 }
@@ -44,13 +48,30 @@ pub enum DigestAlg {
     Sha3_512 = 0x0104,
     Blake3   = 0x0201, // UN-KEYED Blake3
 }
+
 impl DigestAlg {
+    /// Returns digest output length in bytes
+    pub const fn out_len(&self) -> usize {
+        match self {
+            DigestAlg::Sha256    => 32,
+            DigestAlg::Sha512    => 64,
+            DigestAlg::Sha3_256  => 32,
+            DigestAlg::Sha3_512  => 64,
+            DigestAlg::Blake3    => 32, // default output size
+        }
+    }
+
+    /// Returns full wire length for digest frame
+    /// (header + digest output)
+    pub const fn wire_len(&self, overhead: usize) -> usize {
+        self.out_len() + overhead
+    }
+
     pub fn can_resume(&self) -> bool {
-        let state = match self {
-            DigestAlg::Blake3       => false,
-            _       => true,
-        };
-        state
+        match self {
+            DigestAlg::Blake3 => false,
+            _ => true,
+        }
     }
 }
 
@@ -251,7 +272,11 @@ pub struct SegmentDigestBuilder {
 impl SegmentDigestBuilder {
     /// Create a new digest builder.
     #[inline]
-    pub fn new(alg: DigestAlg, segment_index: u32, frame_count: u32) -> Self {
+    pub fn new(
+        alg: DigestAlg, 
+        segment_index: u32, 
+        frame_count: u32
+    ) -> Self {
         let mut state = DigestState::new(alg);
 
         // Feed segment header: MUST be done for a fresh segment
@@ -306,17 +331,21 @@ impl SegmentDigestBuilder {
         self.update(&frame_index.to_le_bytes());
         self.update(&(ciphertext.len() as u32).to_le_bytes());
         self.update(ciphertext);
-        println!("builder input: seg={} frame_count={} frame_index={} ct_len={}",
-            self.segment_index, self.frame_count, frame_index, ciphertext.len());
+        // println!("builder input: seg={} frame_count={} frame_index={} ct_len={}",
+        //     self.segment_index, self.frame_count, frame_index, ciphertext.len());
     }
 
     /// Finalize and return digest bytes.
     ///
     /// Can be called only once.
     #[inline]
-    pub fn finalize(mut self) -> Vec<u8> {
+    pub fn finalize(mut self) -> Result<Vec<u8>, DigestError> {
+        if self.finalized {
+            return Err(DigestError::AlreadyFinalized);
+        }
         self.finalized = true;
-        self.state.finalize()
+        let actual = self.state.finalize();
+        Ok(actual)
     }
 
 }
@@ -325,9 +354,9 @@ impl SegmentDigestBuilder {
 pub struct SegmentDigestVerifier {
     _alg: DigestAlg,
     state: DigestState,
-    expected: Vec<u8>,
-    segment_index: u32,
-    frame_count: u32,
+    actual: Vec<u8>,
+    _segment_index: u32,
+    _frame_count: u32,
     finalized: bool,
 }
 
@@ -338,7 +367,6 @@ impl SegmentDigestVerifier {
         alg: DigestAlg,
         segment_index: u32,
         frame_count: u32,
-        expected: Vec<u8>,
     ) -> Self {
         let mut state = DigestState::new(alg);
 
@@ -349,9 +377,9 @@ impl SegmentDigestVerifier {
         Self {
             _alg: alg,
             state,
-            expected,
-            segment_index,
-            frame_count,
+            actual: vec![],
+            _segment_index: segment_index,
+            _frame_count: frame_count,
             finalized: false,
         }
     }
@@ -362,7 +390,7 @@ impl SegmentDigestVerifier {
         state: DigestState,
         segment_index: u32,
         frame_count: u32,
-        expected: Vec<u8>,
+        actual: Vec<u8>,
     ) -> Self {
         // FIX: Extract the algorithm from the existing state
         let alg = state.alg();
@@ -374,9 +402,9 @@ impl SegmentDigestVerifier {
         Self {
             _alg: alg,
             state,
-            expected,
-            segment_index,
-            frame_count,
+            actual,
+            _segment_index: segment_index,
+            _frame_count: frame_count,
             finalized: false,
         }
     }
@@ -397,19 +425,29 @@ impl SegmentDigestVerifier {
         self.update(&frame_index.to_le_bytes());
         self.update(&(ciphertext.len() as u32).to_le_bytes());
         self.update(ciphertext);
-        println!("verifier input: seg={} frame_count={} frame_index={} ct_len={}",
-            self.segment_index, self.frame_count, frame_index, ciphertext.len());
+        // println!("verifier input: seg={} frame_count={} frame_index={} ct_len={}",
+        //     self.segment_index, self.frame_count, frame_index, ciphertext.len());
+    }
+    
+    #[inline]
+    /// Finalize and store the actual digest after all frames are processed.
+    pub fn finalize1(mut self) -> Result<Vec<u8>, DigestError> {
+        if self.finalized {
+            return Err(DigestError::AlreadyFinalized);
+        }
+        self.finalized = true;
+        self.actual = self.state.finalize();
+        Ok(self.actual)
     }
 
-    /// Finalize and compare against expected digest.
-    pub fn finalize(mut self) -> Result<(), DigestError> {
-        self.finalized = true;
-        let actual = self.state.finalize();
-        if actual == self.expected {
+    /// Compare a previously finalized digest against the expected one.
+    #[inline]
+    pub fn verify(actual: Vec<u8>, expected: Vec<u8>) -> Result<(), DigestError> {
+        if actual == expected {
             Ok(())
         } else {
-            Err(DigestError::DigestMismatch)
+            Err(DigestError::DigestMismatch { have: actual, need: expected })
         }
     }
-
 }
+

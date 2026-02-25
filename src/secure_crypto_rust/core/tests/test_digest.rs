@@ -15,7 +15,6 @@ mod tests {
     use proptest::prelude::*;
     use crypto_core::crypto::{DigestAlg, SegmentDigestBuilder, DigestError, DigestFrame, SegmentDigestVerifier};
 
-
     fn run_roundtrip(alg: DigestAlg) {
         // Sample segment data
         let segment_index = 42u32;
@@ -30,7 +29,7 @@ mod tests {
         for (idx, ct) in &frames {
             builder.update_frame(*idx, ct);
         }
-        let digest_bytes = builder.finalize();
+        let digest_bytes = builder.finalize().expect("Failed to finalize digest");
 
         // Wrap in DigestFrame
         let frame = DigestFrame { algorithm: alg, digest: digest_bytes.clone() };
@@ -40,11 +39,13 @@ mod tests {
         assert_eq!(decoded.digest, digest_bytes);
 
         // Verify with SegmentDigestVerifier
-        let mut verifier = SegmentDigestVerifier::new(alg, segment_index, frame_count, digest_bytes);
+        let mut verifier = SegmentDigestVerifier::new(alg, segment_index, frame_count);
         for (idx, ct) in &frames {
             verifier.update_frame(*idx, ct);
         }
-        assert!(verifier.finalize().is_ok(), "digest mismatch for {:?}", alg);
+        let actual = verifier.finalize1().expect("Digest finalize failed");
+
+        assert!(SegmentDigestVerifier::verify(actual, digest_bytes).is_ok(), "digest mismatch for {:?}", alg);
     }
 
     #[test]
@@ -95,16 +96,18 @@ mod tests {
         // Build digest
         let mut builder = SegmentDigestBuilder::new(DigestAlg::Sha256, segment_index, frame_count);
         builder.update_frame(0, &ciphertext);
-        let digest_bytes = builder.finalize();
+        let digest_bytes = builder.finalize().expect("Failed to finalize digest");
 
         // Tamper ciphertext
         let tampered = b"tampered".to_vec();
 
         // Verifier should fail
-        let mut verifier = SegmentDigestVerifier::new(DigestAlg::Sha256, segment_index, frame_count, digest_bytes);
+        let mut verifier = SegmentDigestVerifier::new(DigestAlg::Sha256, segment_index, frame_count);
         verifier.update_frame(0, &tampered);
-        let result = verifier.finalize();
-        assert!(matches!(result, Err(DigestError::DigestMismatch)));
+        let actual = verifier.finalize1().expect("Digest finalize failed");
+
+        let result = SegmentDigestVerifier::verify(actual, digest_bytes);
+        assert!(matches!(result, Err(DigestError::DigestMismatch{ have: _, need: _})));
     }
 
     #[test]
@@ -172,7 +175,7 @@ mod tests {
             for (i, ct) in frames.iter().enumerate() {
                 builder.update_frame(i as u32, ct);
             }
-            let digest_bytes = builder.finalize();
+            let digest_bytes = builder.finalize().expect("Failed to finalize digest");
 
             // Encode/decode frame
             let frame = DigestFrame { algorithm: alg, digest: digest_bytes.clone() };
@@ -182,11 +185,14 @@ mod tests {
             prop_assert_eq!(decoded.digest, digest_bytes.clone());
 
             // Verify
-            let mut verifier = SegmentDigestVerifier::new(alg, segment_index, frame_count, digest_bytes);
+            let mut verifier = SegmentDigestVerifier::new(alg, segment_index, frame_count);
             for (i, ct) in frames.iter().enumerate() {
                 verifier.update_frame(i as u32, ct);
             }
-            prop_assert!(verifier.finalize().is_ok());
+            let actual = verifier.finalize1().expect("Digest finalize failed");
+            let result = SegmentDigestVerifier::verify(actual, digest_bytes);
+            
+            prop_assert!(result.is_ok());
         }
     }
 
@@ -200,16 +206,24 @@ mod tests {
             let frame_count = 1u32;
             let mut builder = SegmentDigestBuilder::new(DigestAlg::Sha256, segment_index, frame_count);
             builder.update_frame(0, &ciphertext);
-            let digest_bytes = builder.finalize();
+            let digest_bytes = builder.finalize().expect("Failed to finalize digest");
 
             // Tamper ciphertext by flipping a bit
             let mut tampered = ciphertext.clone();
             tampered[0] ^= 0xFF;
 
-            let mut verifier = SegmentDigestVerifier::new(DigestAlg::Sha256, segment_index, frame_count, digest_bytes);
+            let mut verifier = SegmentDigestVerifier::new(DigestAlg::Sha256, segment_index, frame_count);
             verifier.update_frame(0, &tampered);
-            let result = verifier.finalize();
-            prop_assert!(matches!(result, Err(DigestError::DigestMismatch)));
+
+            let actual = verifier.finalize1().expect("Digest finalize failed");
+            let result = SegmentDigestVerifier::verify(actual, digest_bytes);
+
+            // ✅ No external crate needed
+            if let Err(DigestError::DigestMismatch { have, need }) = result {
+                prop_assert!(have != need);
+            } else {
+                prop_assert!(false, "Expected DigestMismatch error");
+            }
         }
     }
 
@@ -257,20 +271,21 @@ mod tests {
             builder.update_frame(*i, data);
         }
 
-        let digest = builder.finalize();
+        let digest_bytes = builder.finalize().expect("Failed to finalize digest");
 
         let mut verifier = SegmentDigestVerifier::new(
             DigestAlg::Sha256,
             7,
             frames.len() as u32,
-            digest,
         );
 
         for (i, data) in frames {
             verifier.update_frame(i, &data);
         }
+        let actual = verifier.finalize1().expect("Digest finalize failed");
+        let result = SegmentDigestVerifier::verify(actual, digest_bytes);
 
-        assert!(verifier.finalize().is_ok());
+        assert!(result.is_ok());
     }
 
     // ## 2️⃣ Digest mismatch detection
@@ -279,17 +294,20 @@ mod tests {
     fn digest_mismatch_detected() {
         let mut builder = SegmentDigestBuilder::new(DigestAlg::Sha256, 1, 1);
         builder.update_frame(0, b"correct");
-        let digest = builder.finalize();
+        let digest_bytes = builder.finalize().expect("Failed to finalize digest");
 
         let mut verifier = SegmentDigestVerifier::new(
             DigestAlg::Sha256,
             1,
             1,
-            digest,
         );
 
         verifier.update_frame(0, b"tampered");
-        assert!(verifier.finalize().is_err());
+
+        let actual = verifier.finalize1().expect("Digest finalize failed");
+        let result = SegmentDigestVerifier::verify(actual, digest_bytes);
+
+        assert!(result.is_err());
     }
 
     // ## 3️⃣ SHA-512 support
@@ -298,17 +316,20 @@ mod tests {
     fn digest_sha512_works() {
         let mut builder = SegmentDigestBuilder::new(DigestAlg::Sha512, 42, 1);
         builder.update_frame(0, b"data");
-        let digest = builder.finalize();
+        let digest_bytes = builder.finalize().expect("Failed to finalize digest");
 
         let mut verifier = SegmentDigestVerifier::new(
             DigestAlg::Sha512,
             42,
             1,
-            digest,
         );
 
         verifier.update_frame(0, b"data");
-        assert!(verifier.finalize().is_ok());
+
+        let actual = verifier.finalize1().expect("Digest finalize failed");
+        let result = SegmentDigestVerifier::verify(actual, digest_bytes);
+
+        assert!(result.is_ok());
     }
 
     // ## 4️⃣ Blake3 support
@@ -318,18 +339,21 @@ mod tests {
         let mut builder = SegmentDigestBuilder::new(DigestAlg::Blake3, 99, 2);
         builder.update_frame(0, b"a");
         builder.update_frame(1, b"b");
-        let digest = builder.finalize();
+        let digest_bytes = builder.finalize().expect("Failed to finalize digest");
 
         let mut verifier = SegmentDigestVerifier::new(
             DigestAlg::Blake3,
             99,
             2,
-            digest,
         );
 
         verifier.update_frame(0, b"a");
         verifier.update_frame(1, b"b");
-        assert!(verifier.finalize().is_ok());
+
+        let actual = verifier.finalize1().expect("Digest finalize failed");
+        let result = SegmentDigestVerifier::verify(actual, digest_bytes);
+
+        assert!(result.is_ok());
     }
 
     // ## 5️⃣ DigestFrame decode (wire correctness)
@@ -368,7 +392,7 @@ mod tests {
         a.update_frame(0, b"x");
         b.update_frame(0, b"x");
 
-        assert_eq!(a.finalize(), b.finalize());
+        assert_eq!(a.finalize().expect(""), b.finalize().expect(""));
     }
 
     // # 🏁 Final assessment

@@ -11,6 +11,7 @@ use std::io::{self, Write, BufRead, BufReader, BufWriter};
 use std::sync::mpsc::{channel, Sender};
 use std::thread;
 use base64::{engine::general_purpose::STANDARD, Engine};
+use tracing::{debug, error};
 
 #[derive(Debug, Clone)]
 pub enum UnifiedEntry {
@@ -70,7 +71,7 @@ impl LogManager {
     pub fn rotate(&mut self) {
         // For simplicity, write to a file named "unified.log"
         if let Err(e) = self.persist_to_file("unified.log") {
-            eprintln!("Log rotation failed: {}", e);
+            error!("Log rotation failed: {}", e);
         }
         self.entries.clear();
     }
@@ -96,6 +97,7 @@ impl LogManager {
 
 }
 
+#[derive(Debug, Clone)]
 pub struct AsyncLogManager {
     tx: Sender<LogCommand>,
 }
@@ -122,7 +124,7 @@ impl AsyncLogManager {
                         let line = format_entry(&entry);
                         
                         if let Err(e) = writer.write_all(line.as_bytes()) {
-                            eprintln!("Log Write Error: {}", e);
+                            error!("Log Write Error: {}", e);
                             continue;
                         }
                         let _ = writer.flush();
@@ -160,12 +162,12 @@ impl AsyncLogManager {
     }
 
     pub fn console(&self, message: String) {
-        eprintln!("{}", message);
+        debug!("{}", message);
     }
     /// Non-blocking append. Sends entry to background thread.
     pub fn append(&self, entry: UnifiedEntry) {
         if let Err(e) = self.tx.send(LogCommand::Append(entry)) {
-            eprintln!("Failed to send log entry to background thread: {}", e);
+            error!("Failed to send log entry to background thread: {}", e);
         }
     }
 

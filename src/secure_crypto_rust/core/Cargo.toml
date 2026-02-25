@@ -14,6 +14,10 @@
 # crypto-core
 # Pure Rust streaming crypto engine
 # ---------------------------------------------------------------------------
+[profile.release]
+lto = true
+codegen-units = 1
+
 [package]
 name = "crypto-core"
 version = "0.1.0"
@@ -40,6 +44,7 @@ blake3.workspace = true
 sha2.workspace = true
 sha3.workspace = true
 digest.workspace = true
+# blake3_aead.workspace = true
 
 # --- Compression ---
 lz4.workspace = true
@@ -90,6 +95,10 @@ async-stream.workspace = true
 async-trait.workspace = true
 tokio.workspace = true
 paste.workspace = true
+once_cell.workspace = true
+hybrid-array.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
 
 # ---------------------------------------------------------------------------
 # Dev & test dependencies (FAST)
@@ -97,6 +106,7 @@ paste.workspace = true
 [dev-dependencies]
 criterion = "0.5"
 proptest.workspace = true
+
 
 [[bin]]
 name = "bench_v2_memory"
@@ -141,9 +151,20 @@ path = "tests/public_api/test_telemetry_config.rs"
 name = "test_compression_cipher_variants"
 path = "tests/public_api/test_compression_cipher_variants.rs"
 
+[[bench]]
+name = "bench_aead_variants"
+harness = false
 
 [[bench]]
-name = "bench_dummy"
+name = "bench_frame_worker"
+harness = false
+
+[[bench]]
+name = "bench_frame_workers"
+harness = false
+
+[[bench]]
+name = "bench_segment_workers"
 harness = false
 
 [[bench]]
@@ -163,7 +184,7 @@ name = "bench_digest_variants"
 harness = false
 
 [[bench]]
-name = "bench_v2_memory"
+name = "bench_memory_variants"
 harness = false
 
 # ---------------------------------------------------------------------------

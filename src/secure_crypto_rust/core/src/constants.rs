@@ -35,7 +35,7 @@ pub const WORKERS_COUNT: &[usize] = &[2, 4, 8, 16];
 // - **Large queue (>32)**: Can cause memory bloat, uneven scheduling, and delayed error propagation. Most cryptographic pipelines (AES, VPNs, TLS offload) deliberately cap queues at small powers of two.  
 // - **Industry practice**: VPN engines, GPU crypto libraries, and parallel AES implementations typically use **queue caps of 4–16**.
 pub const QUEUE_CAPS: &[usize] = &[2, 4, 8, 16];
-pub const DEFAULT_WORKERS: usize = 2;            // or num_cpus::get()
+pub const DEFAULT_WORKERS: usize = 2;            // or num_cpus::get().saturation_sub(1)
 pub const DEFAULT_QUEUE_CAP: usize = 4;          // or workers * 2
 
 /// Defaults when Option<T> is None
@@ -90,6 +90,16 @@ impl RoundingBase {
 pub mod cipher_ids {
     pub const AES256_GCM: u16        = 0x0001;
     pub const CHACHA20_POLY1305: u16 = 0x0002;
+    // pub const BLAKE3K: u16           = 0x0003;
+
+    pub fn name(id: u16) -> &'static str {
+        match id {
+            AES256_GCM        => "AES256_GCM",
+            CHACHA20_POLY1305 => "CHACHA20_POLY1305",
+            // BLAKE3K           => "BLAKE3K",
+            _                 => "UNKNOWN",
+        }
+    }
 }
 
 /// HKDF PRF identifiers (mirrored in headers).

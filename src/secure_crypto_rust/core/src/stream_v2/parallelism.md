@@ -3,7 +3,7 @@
 Instead of hard‑coding `worker_count` and `inflight_segments`, we can derive them at runtime:
 
 * **CPU cores**:  
-  Use `num_cpus::get()` to set `worker_count`. For example, `worker_count = num_cpus::get() / 2` if we want to leave headroom for other tasks.
+  Use `num_cpus::get_physical()` to set `worker_count`. For example, `worker_count = num_cpus::get_physical() / 2` if we want to leave headroom for other tasks.
   
 * **Memory capacity**:  
   Use `sysinfo` crate (`System::new_all()`) to query total RAM. Then set `inflight_segments` based on `total_memory / max_segment_size`.  
@@ -14,7 +14,9 @@ Instead of hard‑coding `worker_count` and `inflight_segments`, we can derive t
 
 ```rust
 fn dynamic_profile(max_segment_size: usize) -> ParallelismProfile {
-    let cores = num_cpus::get();
+    // Hyperthreads do not double AES throughput.
+    // Physical cores matter.
+    let cores = num_cpus::get().saturation_sub(1);
     let mut sys = sysinfo::System::new_all();
     sys.refresh_memory();
     let total_mem = sys.total_memory(); // in KB
@@ -33,7 +35,9 @@ fn dynamic_profile(max_segment_size: usize) -> ParallelismProfile {
 
 ### 1. CPU Awareness
 
-* Detect total cores with `num_cpus::get()`.
+* Hyperthreads do not double AES throughput.
+* Physical cores matter.
+* Detect total cores with `num_cpus::get_physical()` instead of `num_cpus::get()`.
 * Use `cores.saturating_sub(1)` to leave one free for OS/system tasks.
 * Optionally, scale down further if we want to reserve capacity for other services.
 
@@ -315,7 +319,7 @@ impl Scheduler {
 Add the scheduler as part of the pipeline state:
 
 ```rust
-pub fn run_encrypt_pipeline<R, W>(
+pub fn encrypt_pipeline<R, W>(
     mut reader: R,
     mut writer: W,
     crypto: SegmentCryptoContext,

@@ -28,7 +28,7 @@ pub fn build_aad(
     out.extend_from_slice(&aad_header.frame_type.to_le_bytes());
     out.extend_from_slice(&aad_header.segment_index.to_le_bytes());
     out.extend_from_slice(&aad_header.frame_index.to_le_bytes());
-    out.extend_from_slice(&aad_header.plaintext_len.to_le_bytes());
+    out.extend_from_slice(&aad_header.payload_len.to_le_bytes());
 
     debug_assert_eq!(out.len(), AadHeader::LEN_V1);
     Ok(out)

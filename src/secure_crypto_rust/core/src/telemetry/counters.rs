@@ -6,7 +6,7 @@
 //! Summary: Collects frame counts and byte counts during encrypt/decrypt.
 //! Converted into immutable TelemetrySnapshot at pipeline end.
 use bincode::{Encode, Decode};
-use std::ops::AddAssign;
+use std::{fmt, ops::AddAssign};
 
 /// Deterministic counters collected during stream processing
 #[derive(Default, Clone, Debug, Encode, Decode, PartialEq)]
@@ -76,5 +76,19 @@ impl AddAssign for TelemetryCounters {
         self.bytes_compressed   += rhs.bytes_compressed;
         self.bytes_ciphertext   += rhs.bytes_ciphertext;
         self.bytes_overhead     += rhs.bytes_overhead;
+    }
+}
+
+impl fmt::Display for TelemetryCounters {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        writeln!(f, "=== Telemetry Counters Summary ===")?;
+        writeln!(f, "  frames_header: {}", self.frames_header)?;
+        writeln!(f, "  frames_data: {}", self.frames_data)?;
+        writeln!(f, "  frames_digest: {}", self.frames_digest)?;
+        writeln!(f, "  frames_terminator: {}", self.frames_terminator)?;
+        writeln!(f, "  bytes_plaintext: {}", self.bytes_plaintext)?;
+        writeln!(f, "  bytes_compressed: {}", self.bytes_compressed)?;
+        writeln!(f, "  bytes_ciphertext: {}", self.bytes_ciphertext)?;
+        writeln!(f, "  bytes_overhead: {}", self.bytes_overhead)
     }
 }

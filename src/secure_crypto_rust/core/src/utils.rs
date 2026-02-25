@@ -1,7 +1,49 @@
 use std::fmt;
+use std::sync::Once;
 use num_enum::TryFromPrimitive;
+use tracing::{Level};
+use tracing_subscriber::EnvFilter; // ✅ works if we enable the `env-filter` feature
 
 use crate::{constants::{ALLOWED_CHUNK_SIZES, ChunkPolicy, DEFAULT_CHUNK_SIZE, MAX_CHUNK_SIZE, RoundingBase}};
+
+static INIT: Once = Once::new();
+/// Initialize a default tracing logger with optional level.
+/// Call this once at the start of our program or benchmark.
+pub fn tracing_logger(_level: Option<Level>) {
+    INIT.call_once(|| {
+        // Build filter from RUST_LOG or fallback to provided level 
+        let filter = EnvFilter::from_default_env(); // respects RUST_LOG
+            // .add_directive(level.unwrap_or(Level::INFO).into());
+
+        let subscriber = tracing_subscriber::fmt()
+            .with_env_filter(filter)
+            // .with_max_level(level.unwrap_or(Level::INFO)) // default to INFO if None
+            .with_target(false)            // hide module path
+            .with_thread_names(true)       // show thread names
+            .finish();
+
+        tracing::subscriber::set_global_default(subscriber)
+            .expect("Failed to set global tracing subscriber");
+    });
+}
+
+// ```rust
+// fn main() {
+//     // Default INFO level
+//     tracing_logger(None);
+
+//     // Or explicitly set DEBUG level
+//     tracing_logger(Some(tracing::Level::DEBUG));
+
+//     tracing::info!("Benchmark starting");
+//     tracing::debug!("Debug details: {:?}", 42);
+// }
+// ```
+
+// ### 🔑 Notes
+// - `tracing_logger(None)` → defaults to `INFO`.  
+// - `tracing_logger(Some(Level::DEBUG))` → enables debug output.  
+// - We can still override with environment variables (`RUST_LOG=error cargo bench`) if we add `.with_env_filter(...)` to the subscriber.  
 
 #[repr(u16)]
 #[derive(Copy, Clone, Debug, PartialEq, Eq, TryFromPrimitive)]
@@ -40,6 +82,10 @@ where
         Ok(variant) => format!("{:?}", variant),
         Err(_) => format!("0x{:x}", raw),
     }
+}
+
+pub fn to_hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| format!("{:02x}", b)).collect::<String>()
 }
 
 // Helper function to flatten frames into single plaintext blob

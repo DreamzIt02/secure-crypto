@@ -25,9 +25,9 @@ use crate::constants::{cipher_ids, prf_ids, flags};
 #[repr(u16)]
 #[derive(Copy, Clone, Debug, PartialEq, Eq, TryFromPrimitive)]
 pub enum Strategy {
-    Sequential = 0x0000,
-    Parallel   = 0x0001,
-    Auto       = 0x0002,
+    Auto       = 0x0000,
+    Sequential = 0x0001,
+    Parallel   = 0x0002,
 }
 impl Strategy {
     pub fn from(raw: u16) -> Result<Self, HeaderError> {
@@ -54,6 +54,8 @@ impl Strategy {
 pub enum CipherSuite {
     Aes256Gcm        = cipher_ids::AES256_GCM,
     Chacha20Poly1305 = cipher_ids::CHACHA20_POLY1305,
+    // Blake3Aead       = cipher_ids::BLAKE3K, // assign a new ID
+
 }
 impl CipherSuite {
     pub fn verify(raw: u16) -> Result<(), HeaderError> {
@@ -213,7 +215,7 @@ impl HeaderV1 {
             cipher: CipherSuite::Chacha20Poly1305 as u16,
             hkdf_prf: HkdfPrf::Blake3K as u16,
             compression: CompressionCodec::Zstd as u16,
-            strategy: Strategy::Parallel as u16,
+            strategy: Strategy::Auto as u16,
             aad_domain: AadDomain::Generic as u16,
             flags: 0,
             chunk_size: DEFAULT_CHUNK_SIZE as u32,

@@ -6,7 +6,7 @@ mod tests {
 
     use bytes::Bytes;
     use crossbeam::channel::{Receiver, Sender, bounded, unbounded};
-    use crypto_core::{crypto::DigestAlg, headers::HeaderV1, stream_v2::{frame_worker::{DecryptedFrame, EncryptedFrame, FrameInput, FrameWorkerError, decrypt::DecryptFrameWorker1, encrypt::EncryptFrameWorker1}, segment_worker::{DecryptSegmentInput, EncryptSegmentInput, SegmentWorkerError, decrypt::process_decrypt_segment_1, encrypt::process_encrypt_segment_1}, segmenting::{SegmentHeader, types::SegmentFlags}}, telemetry::{Stage, StageTimes, TelemetryCounters}};
+    use crypto_core::{crypto::DigestAlg, headers::HeaderV1, stream_v2::{frame_worker::{DecryptedFrame, EncryptedFrame, FrameInput, FrameWorkerError, decrypt::DecryptFrameWorker1, encrypt::EncryptFrameWorker1}, segment_worker::{DecryptSegmentInput, EncryptSegmentInput, SegmentWorkerError, dec_helpers::process_decrypt_segment_1, enc_helpers::process_encrypt_segment_1}, segmenting::{SegmentHeader, types::SegmentFlags}}, telemetry::{Stage, StageTimes, TelemetryCounters}};
 
     /// Build a deterministic encrypted segment fixture for testing.
     /// This uses the real encrypt pipeline to produce a wire payload

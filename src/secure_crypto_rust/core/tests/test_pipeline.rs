@@ -20,7 +20,7 @@ mod tests {
     use crypto_core::stream_v2::framing::FrameHeader;
     use crypto_core::stream_v2::io::{PayloadReader};
     use crypto_core::stream_v2::parallelism::{HybridParallelismProfile, ParallelismConfig};
-    use crypto_core::stream_v2::pipeline::{PipelineConfig, run_decrypt_pipeline, run_encrypt_pipeline};
+    use crypto_core::stream_v2::pipeline::{PipelineConfig, decrypt_pipeline, encrypt_pipeline};
     use crypto_core::stream_v2::segment_worker::{EncryptContext, DecryptContext, SegmentWorkerError};
     use crypto_core::stream_v2::segmenting::SegmentHeader;
     use crypto_core::telemetry::TelemetrySnapshot;
@@ -31,7 +31,7 @@ mod tests {
     // ------------------------------------------------------------
     fn setup_enc_context(alg: DigestAlg) -> (EncryptContext, Arc<AsyncLogManager>) {
         let header = HeaderV1::test_header(); // Mock header
-        let profile = HybridParallelismProfile::dynamic(header.chunk_size as u32, 0.50, 64);
+        let profile = HybridParallelismProfile::semi_dynamic(header.chunk_size as u32, 0.50, 64);
        // Create a Vec of 32 bytes
         let session_key = vec![0x42u8; KEY_LEN_32];
         let log_manager = Arc::new(AsyncLogManager::new("test_audit.log", 100).unwrap());
@@ -46,7 +46,7 @@ mod tests {
     }
     fn setup_dec_context(alg: DigestAlg) -> (DecryptContext, Arc<AsyncLogManager>) {
         let header = HeaderV1::test_header(); // Mock header
-        let profile = HybridParallelismProfile::dynamic(header.chunk_size as u32, 0.50, 64);
+        let profile = HybridParallelismProfile::semi_dynamic(header.chunk_size as u32, 0.50, 64);
        // Create a Vec of 32 bytes
         let session_key = vec![0x42u8; KEY_LEN_32];
         let log_manager = Arc::new(AsyncLogManager::new("test_audit.log", 100).unwrap());
@@ -79,7 +79,7 @@ mod tests {
         // Wrap in Arc before passing into pipeline
         let crypto_enc = Arc::new(crypto_enc);
 
-        let enc_snapshot = run_encrypt_pipeline(
+        let enc_snapshot = encrypt_pipeline(
             &mut enc_reader,
             enc_writer,
             crypto_enc,
@@ -97,7 +97,7 @@ mod tests {
         // Wrap in Arc before passing into pipeline
         let crypto_dec = Arc::new(crypto_dec);
 
-        run_decrypt_pipeline(
+        decrypt_pipeline(
             &mut dec_reader,
             dec_writer,
             crypto_dec,
@@ -132,7 +132,7 @@ mod tests {
         // Wrap in Arc before passing into pipeline
         let crypto_enc = Arc::new(crypto_enc);
 
-        run_encrypt_pipeline(
+        encrypt_pipeline(
             &mut enc_reader,
             Cursor::new(&mut encrypted),
             crypto_enc,
@@ -148,7 +148,7 @@ mod tests {
         let crypto_dec = Arc::new(crypto_dec);
 
         let mut decrypted = Vec::new();
-        let snapshot = run_decrypt_pipeline(
+        let snapshot = decrypt_pipeline(
             &mut dec_reader,
             Cursor::new(&mut decrypted),
             crypto_dec,
@@ -203,7 +203,7 @@ mod tests {
         // Wrap in Arc before passing into pipeline
         let crypto_enc = Arc::new(crypto_enc);
 
-        run_encrypt_pipeline(
+        encrypt_pipeline(
             &mut enc_reader,
             Box::new(Cursor::new(&mut encrypted)),
             crypto_enc,
@@ -219,7 +219,7 @@ mod tests {
         let dec_cursor = Cursor::new(encrypted);
         let err = PayloadReader::with_header(dec_cursor).unwrap_err();
 
-        // let err = run_decrypt_pipeline(
+        // let err = decrypt_pipeline(
         //     &mut dec_reader,
         //     Box::new(Cursor::new(Vec::new())),
         //     crypto_dec,
@@ -244,7 +244,7 @@ mod tests {
         // Wrap in Arc before passing into pipeline
         let crypto_enc = Arc::new(crypto_enc);
 
-        run_encrypt_pipeline(
+        encrypt_pipeline(
             &mut enc_reader,
             Box::new(Cursor::new(&mut encrypted)),
             crypto_enc,
@@ -267,7 +267,7 @@ mod tests {
         // Wrap in Arc before passing into pipeline
         let crypto_dec = Arc::new(crypto_dec);
 
-        let err = run_decrypt_pipeline(
+        let err = decrypt_pipeline(
             &mut dec_reader,
             Box::new(Cursor::new(Vec::new())),
             crypto_dec,
@@ -299,7 +299,7 @@ mod tests {
 
         // First encrypt to produce ciphertext
         let mut encrypted = Vec::new();
-        let snapshot = run_encrypt_pipeline(
+        let snapshot = encrypt_pipeline(
             &mut enc_reader,
             Cursor::new(&mut encrypted),
             crypto_enc,

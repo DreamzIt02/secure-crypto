@@ -29,14 +29,18 @@ pub const MAX_FRAME_SIZE: usize = 64 * 1024;     // 64 KiB
 /// Frame size mapping table (precomputed for common segment sizes)
 pub const FRAME_SIZE_TABLE: &[(usize, usize)] = &[
     // (segment_size, optimal_frame_size)
-    (16 * 1024,    4 * 1024),   // 16 KiB segment → 4 KiB frames (4 frames)
-    (32 * 1024,    8 * 1024),   // 32 KiB segment → 8 KiB frames (4 frames)
-    (64 * 1024,    16 * 1024),  // 64 KiB segment → 16 KiB frames (4 frames)
-    (128 * 1024,   16 * 1024),  // 128 KiB segment → 16 KiB frames (8 frames)
-    (256 * 1024,   16 * 1024),  // 256 KiB segment → 16 KiB frames (16 frames)
-    (1024 * 1024,  32 * 1024),  // 1 MiB segment → 32 KiB frames (32 frames)
-    (2048 * 1024,  64 * 1024),  // 2 MiB segment → 64 KiB frames (32 frames)
-    (4096 * 1024,  64 * 1024),  // 4 MiB segment → 64 KiB frames (64 frames)
+    (16 * 1024,    4 * 1024),       // 16 KiB segment  → 4 KiB frames  (4 frames)
+    (32 * 1024,    8 * 1024),       // 32 KiB segment  → 8 KiB frames  (4 frames)
+    (64 * 1024,    16 * 1024),      // 64 KiB segment  → 16 KiB frames (4 frames)
+    (128 * 1024,   16 * 1024),      // 128 KiB segment → 16 KiB frames (8 frames)
+    (256 * 1024,   16 * 1024),      // 256 KiB segment → 16 KiB frames (16 frames)
+    (512 * 1024,   32 * 1024),      // 512 KiB segment → 32 KiB frames (16 frames)
+    (1 * 1024 * 1024,  64 * 1024),  // 1 MiB segment   → 64 KiB frames (16 frames)
+    (2 * 1024 * 1024,  64 * 1024),  // 2 MiB segment   → 64 KiB frames  (32 frames)
+    (4 * 1024 * 1024,  128 * 1024), // 4 MiB segment   → 128 KiB frames (32 frames)
+    (8 * 1024 * 1024,  256 * 1024), // 8 MiB segment   → 256 KiB frames (32 frames)
+    (16 * 1024 * 1024, 256 * 1024), // 16 MiB segment  → 256 KiB frames (64 frames)
+    (32 * 1024 * 1024, 512 * 1024), // 32 MiB segment  → 512 KiB frames (64 frames)
 ];
 
 /// `SegmentInput` is the “raw” form: just plaintext frames.
@@ -55,9 +59,9 @@ pub struct EncryptSegmentInput {
 #[derive(Debug, Clone)]
 pub struct EncryptedSegment {
     pub header: SegmentHeader,
-    pub wire: Bytes, // 🔥 contiguous encoded frames
     pub counters: TelemetryCounters,
     pub stage_times: StageTimes,
+    pub wire: Bytes, // 🔥 contiguous encoded frames
 }
 
 #[derive(Debug)]
@@ -81,9 +85,9 @@ impl From<EncryptedSegment> for DecryptSegmentInput {
 #[derive(Debug, Clone)]
 pub struct DecryptedSegment {
     pub header: SegmentHeader,
-    pub bytes: Bytes, // plaintext frames
     pub counters: TelemetryCounters,
     pub stage_times: StageTimes,
+    pub bytes: Bytes, // plaintext frames
 }
 
 #[derive(Debug, Clone)]
@@ -170,7 +174,7 @@ pub enum SegmentWorkerError {
     CheckpointRestoreFailed(String),
     MissingDigestFrame,
     MissingTerminatorFrame,
-    WorkerDisconnected,
+    // WorkerDisconnected,
 
     FrameWorkerError(FrameWorkerError),
     SegmentError(SegmentError),
@@ -214,13 +218,13 @@ pub enum SegmentWorkerError {
 impl fmt::Display for SegmentWorkerError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            SegmentWorkerError::StateError(msg) => write!(f, "invalid state: {}", msg),
+            SegmentWorkerError::StateError(msg) => write!(f, "state error: {}", msg),
             SegmentWorkerError::InvalidSegment(msg) => write!(f, "invalid segment: {}", msg),
             SegmentWorkerError::CheckpointError(msg) => write!(f, "checkpoint persistence failed: {}", msg),
             SegmentWorkerError::CheckpointRestoreFailed(msg) => write!(f, "checkpoint restore failed: {}", msg),
             SegmentWorkerError::MissingDigestFrame => write!(f, "invalid segment: {}", "Missing mandatory digest frame"),
             SegmentWorkerError::MissingTerminatorFrame => write!(f, "invalid segment: {}", "Missing mandatory terminator frame"),
-            SegmentWorkerError::WorkerDisconnected => write!(f, "fatal error: {}", "Segment worker disconnected unexpectedly"),
+            // SegmentWorkerError::WorkerDisconnected => write!(f, "fatal error: {}", "Segment worker disconnected unexpectedly"),
 
             SegmentWorkerError::FrameWorkerError(e) => write!(f, "frame worker error: {}", e),
             SegmentWorkerError::SegmentError(e) => write!(f, "segment error: {}", e),

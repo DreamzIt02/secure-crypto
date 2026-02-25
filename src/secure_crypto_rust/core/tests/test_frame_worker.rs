@@ -36,7 +36,7 @@ mod tests {
             frame_type: FrameType::Data,
             segment_index: 1,
             frame_index,
-            plaintext: Bytes::copy_from_slice(data),
+            payload: Bytes::copy_from_slice(data),
         }
     }
 
@@ -237,7 +237,7 @@ mod tests {
             frame_type: FrameType::Digest,
             segment_index: 9,
             frame_index: 99,
-            plaintext: Bytes::from_static(b"done"),
+            payload: Bytes::from_static(b"done"),
         };
 
         let encrypted = enc.encrypt_frame(&input).unwrap();
@@ -259,7 +259,7 @@ mod tests {
             frame_type: FrameType::Terminator,
             segment_index: 9,
             frame_index: 99,
-            plaintext: Bytes::from_static(b"oops"),
+            payload: Bytes::from_static(b"oops"),
         };
 
         let result = enc.encrypt_frame(&input);

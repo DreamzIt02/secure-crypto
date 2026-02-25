@@ -1,17 +1,21 @@
 use std::fmt;
+use std::ops::Range;
 use bytes::Bytes;
 
+use crate::stream_v2::framing::FrameHeader;
 use crate::stream_v2::framing::types::{FrameError, FrameType};
-use crate::crypto::types::{CryptoError, NonceError, AadError};
+use crate::crypto::types::{TAG_LEN, CryptoError, NonceError, AadError};
 use crate::telemetry::StageTimes;
 
 #[derive(Debug, Clone)]
 pub enum FrameWorkerError {
+    StateError(String),
     InvalidInput(String),
     CryptoFailure(String),
     InvalidHeader,
     WorkerDisconnected,
     WorkerMissing,
+    Cancelled,
     
     Crypto(CryptoError),
     Nonce(NonceError),
@@ -40,9 +44,11 @@ impl fmt::Display for FrameWorkerError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         use FrameWorkerError::*;
         match self {
+            StateError(msg) => write!(f, "state error: {}", msg),
             InvalidInput(msg) => write!(f, "invalid input: {}", msg),
             CryptoFailure(msg) => write!(f, "crypto failure: {}", msg),
             WorkerDisconnected => write!(f, "fatal error: {}", "Frame worker disconnected unexpectedly"),
+            Cancelled => write!(f, "fatal error: {}", "Frame worker cancelled"),
             WorkerMissing => write!(f, "fatal error: {}", "Frame worker is not allocated"),
             InvalidHeader => write!(f, "invalid header: {}", "Invalid frame header"),
 
@@ -86,7 +92,7 @@ pub struct FrameInput {
     pub segment_index: u32,
     pub frame_index: u32,
     pub frame_type: FrameType,
-    pub plaintext: Bytes, // 🔥 instead of Arc<[u8]>
+    pub payload: Bytes, // 🔥 instead of Arc<[u8]>
 }
 
 // ## ✅ Policy for `FrameType::Digest`
@@ -102,27 +108,27 @@ impl FrameInput {
     pub fn validate(&self) -> Result<(), FrameWorkerError> {
         match self.frame_type {
             FrameType::Data => {
-                if self.plaintext.is_empty() {
+                if self.payload.is_empty() {
                     return Err(FrameWorkerError::InvalidInput(
                         "DATA frame cannot be empty".into(),
                     ));
                 }
             }
             FrameType::Terminator => {
-                if !self.plaintext.is_empty() {
+                if !self.payload.is_empty() {
                     return Err(FrameWorkerError::InvalidInput(
                         "TERMINATOR frame must be empty".into(),
                     ));
                 }
             }
             FrameType::Digest => {
-                if self.plaintext.len() < 4 {
+                if self.payload.len() < 4 {
                     return Err(FrameWorkerError::InvalidInput(
                         "DIGEST frame too short".into(),
                     ));
                 }
                 // Try decoding the digest frame
-                // match DigestFrame::decode(&self.plaintext) {
+                // match DigestFrame::decode(&self.payload) {
                 //     Ok(_) => {}
                 //     Err(e) => {
                 //         return Err(FrameWorkerError::InvalidInput(format!(
@@ -138,7 +144,7 @@ impl FrameInput {
 }
 
 /// Output of encryption
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct EncryptedFrame {
     pub segment_index: u32,
     pub frame_index: u32,
@@ -147,7 +153,7 @@ pub struct EncryptedFrame {
     /// Shared ownership of the full wire frame
     pub wire: Bytes,
     /// Ciphertext view inside `wire`
-    pub ct_range: std::ops::Range<usize>,
+    pub ct_range: Range<usize>,
     pub stage_times: StageTimes,
 }
 
@@ -156,19 +162,38 @@ impl EncryptedFrame {
     pub fn ciphertext(&self) -> &[u8] {
         &self.wire[self.ct_range.clone()]
     }
+    
+    #[inline]
+    pub fn frame_overhead() -> usize {
+        return FrameHeader::LEN + TAG_LEN
+    }
+}
+
+impl Default for EncryptedFrame {
+    fn default() -> Self {
+        Self {
+            segment_index: 0,
+            frame_index: 0,
+            frame_type: FrameType::Data, // choose a neutral variant
+            wire: Bytes::new(),          // empty buffer
+            ct_range: 0..0,              // empty range
+            stage_times: StageTimes::default(),
+        }
+    }
 }
 
 /// Output of decryption
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct DecryptedFrame {
     pub segment_index: u32,
     pub frame_index: u32,
     pub frame_type: FrameType,
 
-    /// Shared ownership of the full wire frame
+    /// Encrypted ciphertext hold zero-copy for using in digest verification of segment
+    #[deprecated]
     pub wire: Bytes,
     /// Ciphertext view inside `wire`
-    pub ct_range: std::ops::Range<usize>,
+    pub ct_range: Range<usize>,
 
     /// Decrypted plaintext
     pub plaintext: Bytes,
@@ -176,12 +201,27 @@ pub struct DecryptedFrame {
 }
 
 impl DecryptedFrame {
+    #[deprecated]
     #[inline]
     pub fn ciphertext(&self) -> &[u8] {
         &self.wire[self.ct_range.clone()]
     }
+    // ✔ digest-safe
+    // ✔ zero-copy ciphertext
+    // ✔ reorderable
+    // ✔ lifetime-safe
 }
-// ✔ digest-safe
-// ✔ zero-copy ciphertext
-// ✔ reorderable
-// ✔ lifetime-safe
+
+impl Default for DecryptedFrame {
+    fn default() -> Self {
+        Self {
+            segment_index: 0,
+            frame_index: 0,
+            frame_type: FrameType::Data, // neutral default variant
+            wire: Bytes::new(),          // empty buffer
+            ct_range: 0..0,              // empty range
+            plaintext: Bytes::new(),     // empty plaintext
+            stage_times: StageTimes::default(),
+        }
+    }
+}

@@ -23,7 +23,7 @@ use crypto_core::types::StreamError;
 
     fn setup_enc_context(alg: DigestAlg) -> (EncryptContext, Arc<AsyncLogManager>) {
         let header = HeaderV1::test_header(); // Mock header
-        let profile = HybridParallelismProfile::dynamic(header.chunk_size as u32, 0.50, 64);
+        let profile = HybridParallelismProfile::semi_dynamic(header.chunk_size as u32, 0.50, 64);
        // Create a Vec of 32 bytes
         let session_key = vec![0x42u8; KEY_LEN_32];
         let log_manager = Arc::new(AsyncLogManager::new("test_audit.log", 100).unwrap());
@@ -39,7 +39,7 @@ use crypto_core::types::StreamError;
 
     fn setup_dec_context(alg: DigestAlg) -> (DecryptContext, Arc<AsyncLogManager>) {
         let header = HeaderV1::test_header(); // Mock header
-        let profile = HybridParallelismProfile::dynamic(header.chunk_size as u32, 0.50, 64);
+        let profile = HybridParallelismProfile::semi_dynamic(header.chunk_size as u32, 0.50, 64);
        // Create a Vec of 32 bytes
         let session_key = vec![0x42u8; KEY_LEN_32];
         let log_manager = Arc::new(AsyncLogManager::new("test_audit.log", 100).unwrap());
@@ -92,7 +92,7 @@ use crypto_core::types::StreamError;
 
         // Spawn encrypt worker
         let enc_handle = std::thread::spawn(move || {
-            enc.run_v2(enc_rx, mid_tx_for_worker);
+            enc.run_v1(enc_rx, mid_tx_for_worker);
         });
 
         // bridge converts EncryptedSegment → DecryptSegmentInput
@@ -100,7 +100,7 @@ use crypto_core::types::StreamError;
 
         // Spawn decrypt worker
         let dec_handle = std::thread::spawn(move || {
-            dec.run_v2(bridge_rx, dec_tx);
+            dec.run_v1(bridge_rx, dec_tx);
         });
 
         // Send input
@@ -189,13 +189,13 @@ use crypto_core::types::StreamError;
 
         // Spawn the workers and keep their handles
         let enc_handle = std::thread::spawn(move || {
-            enc.run_v2(enc_rx, mid_tx);
+            enc.run_v1(enc_rx, mid_tx);
         });
 
         forward_encrypted_to_decrypt(mid_rx, bridge_tx);
 
         let dec_handle = std::thread::spawn(move || {
-            dec.run_v2(bridge_rx, dec_tx);
+            dec.run_v1(bridge_rx, dec_tx);
         });
 
         let plaintext = Bytes::from_static(b"hello segmented crypto world");
@@ -242,14 +242,14 @@ use crypto_core::types::StreamError;
 
         // Spawn the workers and keep their handles
         let enc_handle = std::thread::spawn(move || {
-            enc.run_v2(enc_rx, mid_tx);
+            enc.run_v1(enc_rx, mid_tx);
         });
         // bridge converts EncryptedSegment → DecryptSegmentInput
         forward_encrypted_to_decrypt(mid_rx, bridge_tx);
         //
         // Spawn the workers and keep their handles
         let dec_handle = std::thread::spawn(move || {
-            dec.run_v2(bridge_rx, dec_tx);
+            dec.run_v1(bridge_rx, dec_tx);
         });
 
         let data = vec![0xAB; 2 * 1024 * 1024];
@@ -309,7 +309,7 @@ use crypto_core::types::StreamError;
 
         // Spawn encrypt worker
         let enc_handle = std::thread::spawn(move || {
-            enc.run_v2(enc_rx, mid_tx_for_worker);
+            enc.run_v1(enc_rx, mid_tx_for_worker);
         });
 
         // produce a segment
@@ -337,7 +337,7 @@ use crypto_core::types::StreamError;
 
         // Spawn decrypt worker
         let dec_handle = std::thread::spawn(move || {
-            dec.run_v2(bridge_rx, dec_tx);
+            dec.run_v1(bridge_rx, dec_tx);
         });
 
         // now the decrypt worker should fail verification
@@ -380,14 +380,14 @@ use crypto_core::types::StreamError;
 
         // Spawn encrypt worker
         let enc_handle = std::thread::spawn(move || {
-            enc.run_v2(enc_rx, mid_tx);
+            enc.run_v1(enc_rx, mid_tx);
         });
         // bridge converts EncryptedSegment → DecryptSegmentInput
         forward_encrypted_to_decrypt(mid_rx, bridge_tx);
         //
         // Spawn encrypt worker
         let dec_handle = std::thread::spawn(move || {
-            dec.run_v2(bridge_rx, dec_tx);
+            dec.run_v1(bridge_rx, dec_tx);
         });
 
         enc_tx.send(EncryptSegmentInput {
@@ -440,7 +440,7 @@ use crypto_core::types::StreamError;
 
         // Spawn encrypt worker
         let enc_handle = std::thread::spawn(move || {
-            enc.run_v2(enc_rx, mid_tx_for_worker);
+            enc.run_v1(enc_rx, mid_tx_for_worker);
         });
 
         // produce a segment
@@ -466,7 +466,7 @@ use crypto_core::types::StreamError;
 
         // Spawn decrypt worker
         let dec_handle = std::thread::spawn(move || {
-            dec.run_v2(bridge_rx, dec_tx);
+            dec.run_v1(bridge_rx, dec_tx);
         });
 
         // now the decrypt worker should fail
@@ -513,7 +513,7 @@ use crypto_core::types::StreamError;
 
         // Spawn encrypt worker
         let enc_handle = std::thread::spawn(move || {
-            enc.run_v2(enc_rx, mid_tx_for_worker);
+            enc.run_v1(enc_rx, mid_tx_for_worker);
         });
 
         // produce a segment
@@ -547,7 +547,7 @@ use crypto_core::types::StreamError;
 
         // Spawn decrypt worker
         let dec_handle = std::thread::spawn(move || {
-            dec.run_v2(bridge_rx, dec_tx);
+            dec.run_v1(bridge_rx, dec_tx);
         });
 
         // now the decrypt worker should fail
@@ -582,7 +582,7 @@ use crypto_core::types::StreamError;
 
         // spawn the worker in a separate thread
         let enc_handle = std::thread::spawn(move || {
-            enc.run_v2(rx, out_tx);
+            enc.run_v1(rx, out_tx);
         });
 
         let payload = Bytes::from_static(b"deterministic segment");
@@ -647,7 +647,7 @@ use crypto_core::types::StreamError;
 
         // Spawn encrypt worker
         let enc_handle = std::thread::spawn(move || {
-            enc.run_v2(enc_rx, mid_tx_for_worker);
+            enc.run_v1(enc_rx, mid_tx_for_worker);
         });
 
         // bridge converts EncryptedSegment → DecryptSegmentInput
@@ -655,7 +655,7 @@ use crypto_core::types::StreamError;
 
         // Spawn decrypt worker
         let dec_handle = std::thread::spawn(move || {
-            dec.run_v2(bridge_rx, dec_tx);
+            dec.run_v1(bridge_rx, dec_tx);
         });
 
         let plaintext = Bytes::from_static(b"telemetry test");

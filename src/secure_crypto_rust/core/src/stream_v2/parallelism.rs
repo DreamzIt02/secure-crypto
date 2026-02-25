@@ -124,7 +124,7 @@ pub fn detect_gpu_info() -> GpuInfo {
 pub struct ParallelismConfig {
     cpu_workers: usize, 
     gpu_workers: usize, 
-    mem_fraction: f64, 
+    mem_fraction: f64, // TODO: use this
     hard_cap: usize,
 }
 
@@ -163,7 +163,11 @@ impl HybridParallelismProfile {
     /// Controlled constructor
     fn new(cpu_workers: usize, gpu_workers: usize, hard_cap: usize) -> Self {
         let gpu = detect_gpu_info();
+
         // enforce sane limits
+        // * Hyperthreads do not double AES throughput.
+        // * Physical cores matter.
+
         let cpu_workers = cpu_workers.clamp(1, num_cpus::get().saturating_sub(1));
         let gpu_workers = gpu_workers.clamp(0, gpu.count); // arbitrary cap, adjust as needed
         let inflight_segments = hard_cap.clamp(1, 64); // default 64
@@ -184,9 +188,9 @@ impl HybridParallelismProfile {
     ) -> Result<Self, StreamError> {
         let opts = config.unwrap_or_default();
         match strategy {
+            Strategy::Auto => Ok(Self::dynamic(max_segment_size)),
             Strategy::Sequential => Ok(Self::single_threaded()),
             Strategy::Parallel => Ok(Self::new(opts.cpu_workers, opts.gpu_workers, opts.hard_cap)),
-            Strategy::Auto => Ok(Self::dynamic(max_segment_size, opts.mem_fraction, opts.hard_cap)),
         }
     }
 
@@ -237,9 +241,11 @@ impl HybridParallelismProfile {
     // * `max_segment_size = 32 MB`
     // * `max_segments = 8192 MB / 32 MB = 256`
     // * With `hard_cap = 64`, we get `inflight_segments = 64`.
-    pub fn dynamic(max_segment_size: u32, mem_fraction: f64, hard_cap: usize) -> Self {
-        let cores = num_cpus::get();
-        let cpu_workers = cores.saturating_sub(1);
+    pub fn semi_dynamic(max_segment_size: u32, mem_fraction: f64, hard_cap: usize) -> Self {
+        // * Hyperthreads do not double AES throughput.
+        // * Physical cores matter.
+        let cores = num_cpus::get().saturating_sub(2);
+        let cpu_workers = cores.max(1);
 
         let mut sys = sysinfo::System::new_all();
         sys.refresh_memory();
@@ -261,6 +267,46 @@ impl HybridParallelismProfile {
             cpu_workers,
             gpu_workers,
             inflight_segments: max_segments.min(hard_cap as u32) as usize,
+            gpu_threshold: GPU_THRESHOLD,
+            gpu: Some(gpu),
+        }
+    }
+
+    // * On a machine with 16 cores and 16 GB free RAM:
+    // * `worker_count = 15`
+    // * `budget = 8 GB` (50% of 16 GB)
+    // * `max_segment_size = 32 MB`
+    // * `max_segments = 8192 MB / 32 MB = 256`
+    // * With `hard_cap = 64`, we get `inflight_segments = 64`.
+    pub fn dynamic(max_segment_size: u32) -> Self {
+        let cores = num_cpus::get().saturating_sub(2);
+        let cpu_workers = cores.max(1);
+
+        let mut sys = sysinfo::System::new_all();
+        sys.refresh_memory();
+        let avail_bytes = sys.available_memory() * 1024;
+
+        // Leave 25% headroom for OS and other processes
+        let budget = (avail_bytes as f64 * 0.75) as u32;
+        let max_segments = budget / max_segment_size;
+
+        let gpu = detect_gpu_info();
+        let gpu_workers = gpu.count;
+
+        // Derive inflight segments from worker count
+        let inflight_cpus = max_segments.min(cpu_workers as u32 * 4);
+        let inflight_gpus = max_segments.min(gpu_workers as u32 * 4);
+        let inflight_segments = inflight_cpus.max(inflight_gpus) as usize;
+
+        eprintln!(
+            "[PROFILE] cpu_workers={}, gpu_workers={}, inflight_segments={}",
+            cpu_workers, gpu_workers, inflight_segments
+        );
+
+        Self {
+            cpu_workers,
+            gpu_workers,
+            inflight_segments,
             gpu_threshold: GPU_THRESHOLD,
             gpu: Some(gpu),
         }

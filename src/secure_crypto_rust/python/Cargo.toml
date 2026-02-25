@@ -10,14 +10,20 @@
 # PyO3 bindings over crypto-core
 # ---------------------------------------------------------------------------
 [package]
-name = "crypto-python"
+name = "rust_crypto"
 version = "0.1.0"
 edition = "2021"
 license = "MIT OR Apache-2.0"
 
+# ---------------------------------------------------------------------------
+# Library configuration
+# ---------------------------------------------------------------------------
 [lib]
-name = "rust_crypto"
-crate-type = ["cdylib"]
+name = "rust_crypto"          # Output will be librust_v4.so (Linux),
+                          # rust_v4.dll (Windows), librust_v4.dylib (macOS).
+crate-type = ["cdylib"]   # cdylib ensures a C-compatible dynamic library.
+                          # This strips Rust-specific metadata and exports only
+                          # #[no_mangle] pub extern "C" fn symbols.
 
 # ---------------------------------------------------------------------------
 # Dependencies

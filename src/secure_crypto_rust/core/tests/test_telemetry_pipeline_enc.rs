@@ -8,13 +8,13 @@ mod telemetry_encrypt_tests {
     use crypto_core::recovery::AsyncLogManager;
     use crypto_core::stream_v2::io::PayloadReader;
     use crypto_core::stream_v2::parallelism::HybridParallelismProfile;
-    use crypto_core::stream_v2::pipeline::{PipelineConfig, run_encrypt_pipeline};
+    use crypto_core::stream_v2::pipeline::{PipelineConfig, encrypt_pipeline};
     use crypto_core::stream_v2::segment_worker::{EncryptContext};
     use crypto_core::telemetry::TelemetrySnapshot;
 
     fn setup_enc_context(alg: DigestAlg) -> (EncryptContext, HybridParallelismProfile, Arc<AsyncLogManager>) {
         let header = HeaderV1::test_header(); // Mock header
-        let profile = HybridParallelismProfile::dynamic(header.chunk_size as u32, 0.50, 64);
+        let profile = HybridParallelismProfile::semi_dynamic(header.chunk_size as u32, 0.50, 64);
        // Create a Vec of 32 bytes
         let session_key = vec![0x42u8; KEY_LEN_32];
         let log_manager = Arc::new(AsyncLogManager::new("test_audit.log", 100).unwrap());
@@ -34,7 +34,7 @@ mod telemetry_encrypt_tests {
         let (crypto, profile, log_manager) = setup_enc_context(DigestAlg::Blake3);
         let config_pipe = PipelineConfig::new(profile.clone(), None);
 
-        let mut snapshot = run_encrypt_pipeline(&mut reader, &mut writer, Arc::new(crypto), &config_pipe, log_manager)
+        let mut snapshot = encrypt_pipeline(&mut reader, &mut writer, Arc::new(crypto), &config_pipe, log_manager)
             .expect("pipeline should succeed");
 
         // Attach the buffer contents

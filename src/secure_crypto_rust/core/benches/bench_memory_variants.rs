@@ -4,7 +4,7 @@ use crypto_core::{benchmarks::{bench_v2_encrypt_memory::bench_v2_encrypt_memory_
 fn bench_memory(c: &mut Criterion) {
     c.bench_function("bench_v2_memory_2_memory_sync", |b| {
         b.iter(|| {
-            let payload = random_bytes(64 * 1024 * 1024);
+            let payload = random_bytes(50 * 1024 * 1024);
             let chunk_size = 2 * 1024 * 1024;
             bench_v2_encrypt_memory_2_memory_sync(
                 payload, // plaintext

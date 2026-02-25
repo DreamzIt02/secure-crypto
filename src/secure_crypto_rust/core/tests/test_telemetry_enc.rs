@@ -3,7 +3,7 @@ mod tests {
     use std::{sync::{Arc, atomic::AtomicBool}, time::Duration};
     use bytes::Bytes;
     use crossbeam::channel::{Receiver, Sender, bounded, unbounded};
-    use crypto_core::{crypto::DigestAlg, headers::HeaderV1, stream_v2::{frame_worker::{EncryptedFrame, FrameInput, FrameWorkerError, encrypt::{EncryptFrameWorker1}}, segment_worker::{EncryptSegmentInput, encrypt::process_encrypt_segment_1}, segmenting::types::SegmentFlags}, telemetry::{Stage, StageTimes}};
+    use crypto_core::{crypto::DigestAlg, headers::HeaderV1, stream_v2::{frame_worker::{EncryptedFrame, FrameInput, FrameWorkerError, encrypt::{EncryptFrameWorker1}}, segment_worker::{EncryptSegmentInput, enc_helpers::process_encrypt_segment_1}, segmenting::types::SegmentFlags}, telemetry::{Stage, StageTimes}};
 
     fn make_channels() -> (
         Sender<FrameInput>,

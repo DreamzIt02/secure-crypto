@@ -2,14 +2,14 @@
 
 use bytes::Bytes;
 use crossbeam::channel::{Receiver, Sender, bounded, unbounded};
-use std::{sync::{Arc, atomic::{AtomicBool, Ordering}}, thread, time::Instant};
+use tracing::{debug, error};
+use std::{sync::{Arc, atomic::{AtomicBool, Ordering}}, thread};
 
 use crate::{
-    crypto::{DigestAlg, DigestFrame, SegmentDigestVerifier}, recovery::AsyncLogManager, stream_v2::{
+    recovery::AsyncLogManager, stream_v2::{
         frame_worker::{DecryptedFrame, FrameWorkerError, decrypt::{DecryptFrameWorker0, DecryptFrameWorker1}}, 
-        framing::{FrameError, FrameHeader, FrameType}, 
-        segment_worker::{DecryptContext, DecryptedSegment, SegmentWorkerError, types::DecryptSegmentInput}, segmenting::{SegmentHeader, types::SegmentFlags}
-    }, telemetry::{Stage, StageTimes, counters::TelemetryCounters}, types::StreamError
+        segment_worker::{DecryptContext, DecryptedSegment, SegmentWorkerError, dec_helpers::{decrypt_segment_lockfree, process_decrypt_segment_1}, types::DecryptSegmentInput}
+    }, types::StreamError, utils::tracing_logger
 };
 
 pub struct DecryptSegmentWorker0 {
@@ -47,12 +47,15 @@ impl DecryptSegmentWorker0 {
         rx: Receiver<DecryptSegmentInput>,
         tx: Sender<Result<DecryptedSegment, SegmentWorkerError>>,
     ) {
+        // explicitly set DEBUG level
+        tracing_logger(Some(tracing::Level::DEBUG));
+
         let crypto = self.crypto.clone();
         let fatal_tx = self.fatal_tx.clone();
         let cancelled = self.cancelled.clone();
 
         thread::spawn(move || {
-            eprintln!("[WORKER] thread spawned");
+            debug!("[WORKER] thread spawned");
             let worker_count = crypto.base.profile.cpu_workers();
             let digest_alg = crypto.base.digest_alg;
 
@@ -76,11 +79,11 @@ impl DecryptSegmentWorker0 {
             // Main loop: process encrypted segments
             while let Ok(segment) = rx.recv() {
                 if cancelled.load(Ordering::Relaxed) {
-                    eprintln!("[WORKER] cancelled, exiting early");
+                    error!("[WORKER] cancelled, exiting early");
                     break;
                 }
 
-                eprintln!("[WORKER] processing segment {}", segment.header.segment_index());
+                debug!("[WORKER] processing segment {}", segment.header.segment_index());
 
                 match segment.header.validate(&segment.wire) {
                     Ok(()) => {
@@ -94,16 +97,18 @@ impl DecryptSegmentWorker0 {
 
                         match result {
                             Ok(seg) => {
-                                if tx.send(Ok(seg)).is_err() {
-                                    eprintln!("[DECRYPT SEGMENT WORKER] tx send failed, receiver gone");
+                                if let Err(e) = tx.send(Ok(seg)) {
+                                    error!("[DECRYPT SEGMENT WORKER] tx send failed, receiver gone");
                                     // propagate fatal error so monitor drops channels
-                                    let _ = fatal_tx.send(StreamError::SegmentWorker(SegmentWorkerError::WorkerDisconnected));
+                                    let _ = fatal_tx.send(StreamError::SegmentWorker(
+                                        SegmentWorkerError::StateError(e.to_string()),
+                                    ));
                                     cancelled.store(true, Ordering::Relaxed);
                                     break;
                                 }
                             }
                             Err(e) => {
-                                eprintln!("[DECRYPT SEGMENT WORKER] segment error: {:?}", e);
+                                error!("[DECRYPT SEGMENT WORKER] segment error: {:?}", e);
                                 let _ = fatal_tx.send(StreamError::SegmentWorker(e.clone()));
                                 cancelled.store(true, Ordering::Relaxed);
                                 let _ = tx.send(Err(e));
@@ -113,9 +118,9 @@ impl DecryptSegmentWorker0 {
 
                     }
                     Err(e) => {
-                        eprintln!("[DECRYPT SEGMENT WORKER] header validation failed: {:?}", e);
+                        error!("[DECRYPT SEGMENT WORKER] header validation failed: {:?}", e);
                         if tx.send(Err(SegmentWorkerError::SegmentError(e.clone()))).is_err() {
-                            eprintln!("[DECRYPT SEGMENT WORKER] tx send failed, receiver gone");
+                            error!("[DECRYPT SEGMENT WORKER] tx send failed, receiver gone");
                         }
                         let _ = fatal_tx.send(StreamError::Segment(e.clone()));
                         cancelled.store(true, Ordering::Relaxed);
@@ -125,7 +130,7 @@ impl DecryptSegmentWorker0 {
                 }
             }
 
-            eprintln!("[WORKER] rx closed, dropping frame_tx and exiting");
+            debug!("[WORKER] rx closed, dropping frame_tx and exiting");
             drop(frame_tx);
             drop(tx);
         });
@@ -149,12 +154,15 @@ impl DecryptSegmentWorker0 {
         rx: Receiver<DecryptSegmentInput>,
         tx: Sender<Result<DecryptedSegment, SegmentWorkerError>>,
     ) {
+        // explicitly set DEBUG level
+        tracing_logger(Some(tracing::Level::DEBUG));
+
         let crypto = self.crypto.clone();
         let fatal_tx = self.fatal_tx.clone();
         let cancelled = self.cancelled.clone();
 
         thread::spawn(move || {
-            eprintln!("[DECRYPT SEGMENT WORKER] thread spawned");
+            debug!("[DECRYPT SEGMENT WORKER] thread spawned");
 
             // ---- Initialize frame worker pool ----
             let worker_count = crypto.base.profile.cpu_workers();
@@ -185,7 +193,7 @@ impl DecryptSegmentWorker0 {
             loop {
                 // Check for cancellation before blocking on receive
                 if cancelled.load(Ordering::Relaxed) {
-                    eprintln!("[DECRYPT SEGMENT WORKER] cancelled, exiting early");
+                    error!("[DECRYPT SEGMENT WORKER] cancelled, exiting early");
                     break;
                 }
 
@@ -194,13 +202,13 @@ impl DecryptSegmentWorker0 {
                     Ok(segment) => segment,
                     Err(_) => {
                         // Channel closed normally - all segments processed
-                        eprintln!("[DECRYPT SEGMENT WORKER] rx closed, exiting");
+                        debug!("[DECRYPT SEGMENT WORKER] rx closed, exiting");
                         break;
                     }
                 };
 
                 let segment_idx = segment.header.segment_index();
-                eprintln!(
+                debug!(
                     "[DECRYPT SEGMENT WORKER] processing segment {}",
                     segment_idx
                 );
@@ -220,13 +228,13 @@ impl DecryptSegmentWorker0 {
                         match result {
                             Ok(decrypted_segment) => {
                                 // Send decrypted segment to output
-                                if let Err(_) = tx.send(Ok(decrypted_segment)) {
+                                if let Err(e) = tx.send(Ok(decrypted_segment)) {
                                     // Output channel closed unexpectedly - pipeline is shutting down
-                                    eprintln!(
+                                    error!(
                                         "[DECRYPT SEGMENT WORKER] tx send failed, receiver disconnected"
                                     );
                                     let _ = fatal_tx.send(StreamError::SegmentWorker(
-                                        SegmentWorkerError::WorkerDisconnected,
+                                        SegmentWorkerError::StateError(e.to_string()),
                                     ));
                                     cancelled.store(true, Ordering::Relaxed);
                                     break;
@@ -236,10 +244,11 @@ impl DecryptSegmentWorker0 {
                             }
                             Err(e) => {
                                 // Segment processing failed - this is a fatal error
-                                eprintln!(
-                                    "[DECRYPT SEGMENT WORKER] processing error: {:?}",
-                                    e
-                                );
+                                // This prints raw arrays (Debug)
+                                // error!("[DECRYPT SEGMENT WORKER] processing error: {:?}", e);
+
+                                // This prints hex strings (Display)
+                                error!("[DECRYPT SEGMENT WORKER] processing error: {}", e);
 
                                 // Signal fatal error to pipeline monitor
                                 let _ = fatal_tx.send(StreamError::SegmentWorker(e.clone()));
@@ -255,7 +264,7 @@ impl DecryptSegmentWorker0 {
                     }
                     Err(e) => {
                         // Header validation failed - this is a fatal error
-                        eprintln!(
+                        error!(
                             "[DECRYPT SEGMENT WORKER] header validation failed: {:?}",
                             e
                         );
@@ -274,7 +283,7 @@ impl DecryptSegmentWorker0 {
             }
 
             // Cleanup: drop channels to signal frame workers to exit
-            eprintln!("[DECRYPT SEGMENT WORKER] dropping frame_tx and exiting");
+            debug!("[DECRYPT SEGMENT WORKER] dropping frame_tx and exiting");
             drop(frame_tx);
             drop(tx);
         });
@@ -282,6 +291,7 @@ impl DecryptSegmentWorker0 {
 
 }
 
+#[derive(Debug, Clone)]
 pub struct DecryptSegmentWorker1 {
     crypto: Arc<DecryptContext>,                 // shared immutable context
     log_manager: Arc<AsyncLogManager>,
@@ -324,17 +334,20 @@ impl DecryptSegmentWorker1 {
     /// - Checks cancellation before processing each segment
     /// - Propagates errors via fatal_tx to trigger pipeline shutdown
     /// - Exits gracefully when input channel closes or on cancellation
-    pub fn run_v2(
+    pub fn run_v1(// SUCCESS: This is working good code run_v1
         self,
         rx: Receiver<DecryptSegmentInput>,
         tx: Sender<Result<DecryptedSegment, SegmentWorkerError>>,
     ) {
+        // explicitly set DEBUG level
+        tracing_logger(Some(tracing::Level::DEBUG));
+
         let crypto = self.crypto.clone();
         let fatal_tx = self.fatal_tx.clone();
         let cancelled = self.cancelled.clone();
 
         // Remove thread::spawn - we're already in a scoped thread!
-            eprintln!("[DECRYPT SEGMENT WORKER] thread spawned");
+            debug!("[DECRYPT SEGMENT WORKER] thread spawned");
 
             // ---- Initialize frame worker pool ----
             let worker_count = crypto.base.profile.cpu_workers();
@@ -371,7 +384,7 @@ impl DecryptSegmentWorker1 {
             loop {
                 // Check for cancellation before blocking on receive
                 if cancelled.load(Ordering::Relaxed) {
-                    eprintln!("[DECRYPT SEGMENT WORKER] cancelled, exiting early");
+                    error!("[DECRYPT SEGMENT WORKER] cancelled, exiting early");
                     break;
                 }
 
@@ -380,13 +393,13 @@ impl DecryptSegmentWorker1 {
                     Ok(segment) => segment,
                     Err(_) => {
                         // Channel closed normally - all segments processed
-                        eprintln!("[DECRYPT SEGMENT WORKER] rx closed, exiting");
+                        debug!("[DECRYPT SEGMENT WORKER] rx closed, exiting");
                         break;
                     }
                 };
 
                 let segment_idx = segment.header.segment_index();
-                eprintln!(
+                debug!(
                     "[DECRYPT SEGMENT WORKER] processing segment {}",
                     segment_idx
                 );
@@ -405,13 +418,13 @@ impl DecryptSegmentWorker1 {
                         match result {
                             Ok(decrypted_segment) => {
                                 // Send decrypted segment to output
-                                if let Err(_) = tx.send(Ok(decrypted_segment)) {
+                                if let Err(e) = tx.send(Ok(decrypted_segment)) {
                                     // Output channel closed unexpectedly - pipeline is shutting down
-                                    eprintln!(
+                                    error!(
                                         "[DECRYPT SEGMENT WORKER] tx send failed, receiver disconnected"
                                     );
                                     let _ = fatal_tx.send(StreamError::SegmentWorker(
-                                        SegmentWorkerError::WorkerDisconnected,
+                                        SegmentWorkerError::StateError(e.to_string()),
                                     ));
                                     cancelled.store(true, Ordering::Relaxed);
                                     break;
@@ -421,10 +434,11 @@ impl DecryptSegmentWorker1 {
                             }
                             Err(e) => {
                                 // Segment processing failed - this is a fatal error
-                                eprintln!(
-                                    "[DECRYPT SEGMENT WORKER] processing error: {:?}",
-                                    e
-                                );
+                                // This prints raw arrays (Debug)
+                                // error!("[DECRYPT SEGMENT WORKER] processing error: {:?}", e);
+
+                                // This prints hex strings (Display)
+                                error!("[DECRYPT SEGMENT WORKER] processing error: {}", e);
 
                                 // Signal fatal error to pipeline monitor
                                 let _ = fatal_tx.send(StreamError::SegmentWorker(e.clone()));
@@ -440,7 +454,7 @@ impl DecryptSegmentWorker1 {
                     }
                     Err(e) => {
                         // Header validation failed - this is a fatal error
-                        eprintln!(
+                        error!(
                             "[DECRYPT SEGMENT WORKER] header validation failed: {:?}",
                             e
                         );
@@ -459,335 +473,194 @@ impl DecryptSegmentWorker1 {
             }
 
             // Cleanup: drop channels to signal frame workers to exit
-            eprintln!("[DECRYPT SEGMENT WORKER] dropping frame_tx and exiting");
+            debug!("[DECRYPT SEGMENT WORKER] dropping frame_tx and exiting");
             drop(frame_tx);
             drop(tx);
 
     }
 
-}
+    // # ✅ Refactored `run_v2` (Lock-Free Version)
 
+    pub fn run_v2(
+        self,
+        rx: Receiver<DecryptSegmentInput>,
+        tx: Sender<Result<DecryptedSegment, SegmentWorkerError>>,
+    ) {
+        // explicitly set DEBUG level
+        tracing_logger(Some(tracing::Level::DEBUG));
 
-/// Processes a single encrypted segment into plaintext
-///
-/// # Process Flow
-/// 1. Validates segment header and handles empty final segments
-/// 2. Parses frame boundaries from wire format (zero-copy slicing)
-/// 3. Dispatches frame slices to worker pool for parallel decryption
-/// 4. Collects and sorts decrypted data frames
-/// 5. Verifies segment digest over all frame ciphertexts
-/// 6. Validates terminator frame
-/// 7. Reassembles plaintext from all data frames
-///
-/// # Arguments
-/// * `input` - Input segment containing encrypted wire data and header
-/// * `digest_alg` - Digest algorithm for segment integrity verification
-/// * `frame_tx` - Channel to dispatch frame slices to worker pool
-/// * `out_rx` - Channel to collect decrypted frames from workers
-/// * `cancelled` - Cancellation flag for early exit
+        let crypto = self.crypto.clone();
+        let fatal_tx = self.fatal_tx.clone();
+        let cancelled = self.cancelled.clone();
 
-pub fn process_decrypt_segment_1(
-    input: &DecryptSegmentInput,
-    digest_alg: &DigestAlg,
-    frame_tx: &Sender<Bytes>,
-    out_rx: &Receiver<Result<DecryptedFrame, FrameWorkerError>>,
-    cancelled: Arc<AtomicBool>,
-) -> Result<DecryptedSegment, SegmentWorkerError> {
-    let mut counters = TelemetryCounters::default();
-    let mut stage_times = StageTimes::default();
+        debug!("[DECRYPT SEGMENT WORKER] thread spawned");
 
-    eprintln!(
-        "[DECRYPT SEGMENT] processing segment {}",
-        input.header.segment_index()
-    );
+        loop {
+            // Early cancellation check
+            if cancelled.load(Ordering::Relaxed) {
+                error!("[DECRYPT SEGMENT WORKER] cancelled, exiting early");
+                break;
+            }
 
-    // ---- Stage 1: Validation ----
-    let start = Instant::now();
+            // Block for next segment
+            let segment = match rx.recv() {
+                Ok(segment) => segment,
+                Err(_) => {
+                    // channel closed normally
+                    debug!("[DECRYPT SEGMENT WORKER] rx closed, exiting");
+                    break;
+                }
+            };
 
-    // Handle empty final segment (EOF marker)
-    if input.wire.is_empty() && input.header.flags().contains(SegmentFlags::FINAL_SEGMENT) {
-        eprintln!(
-            "[DECRYPT SEGMENT] empty FINAL_SEGMENT at index {}",
-            input.header.segment_index()
-        );
-        return Ok(DecryptedSegment {
-            header: input.header.clone(),
-            bytes: Bytes::new(),
-            counters,
-            stage_times,
-        });
-    }
+            let segment_idx = segment.header.segment_index();
 
-    // Verify CRC32 checksum of segment wire
-    input
-        .header
-        .validate(&input.wire)
-        .map_err(SegmentWorkerError::SegmentError)?;
+            debug!(
+                "[DECRYPT SEGMENT WORKER] processing segment {}",
+                segment_idx
+            );
 
-    stage_times.add(Stage::Validate, start.elapsed());
-
-    // Count segment header overhead
-    counters.add_header(SegmentHeader::LEN);
-
-    // ---- Stage 2: Parse frame boundaries and dispatch for decryption ----
-    let start = Instant::now();
-    let mut offset = 0;
-    let mut frame_count: usize = 0;
-
-    eprintln!(
-        "[DECRYPT SEGMENT] parsing frames from wire (length: {} bytes)",
-        input.wire.len()
-    );
-
-    while offset < input.wire.len() {
-        // Parse frame header to determine frame length
-        let header = FrameHeader::from_bytes(&input.wire[offset..])?;
-        let frame_len = FrameHeader::LEN + header.ciphertext_len() as usize;
-        let end = offset + frame_len;
-
-        // Validate frame doesn't extend beyond wire boundary
-        if end > input.wire.len() {
-            eprintln!("[DECRYPT SEGMENT] frame truncated at offset {}", offset);
-            return Err(FrameError::Truncated.into());
-        }
-
-        eprintln!(
-            "[DECRYPT SEGMENT] dispatching frame {} (segment {}, length: {} bytes)",
-            frame_count,
-            input.header.segment_index(),
-            frame_len
-        );
-
-        // Dispatch frame slice for decryption (zero-copy using Bytes::slice)
-        frame_tx
-            .send(input.wire.slice(offset..end))
-            .map_err(|_| {
-                SegmentWorkerError::FrameWorkerError(FrameWorkerError::WorkerDisconnected)
-            })?;
-
-        offset = end;
-        frame_count += 1;
-    }
-
-    stage_times.add(Stage::Read, start.elapsed());
-
-    // Validate we found at least one frame
-    if frame_count == 0 {
-        eprintln!(
-            "[DECRYPT SEGMENT] no frames found in non-final segment {}",
-            input.header.segment_index()
-        );
-        return Err(SegmentWorkerError::InvalidSegment(
-            "Segment contains no frames".into(),
-        ));
-    }
-
-    // ---- Stage 3: Collect decrypted frames ----
-    let mut data_frames = Vec::with_capacity(frame_count.saturating_sub(2));
-    let mut digest_frame: Option<DecryptedFrame> = None;
-    let mut terminator_frame: Option<DecryptedFrame> = None;
-    let mut received = 0;
-
-    eprintln!(
-        "[DECRYPT SEGMENT] collecting {} decrypted frames",
-        frame_count
-    );
-
-    while received < frame_count {
-        // Check for cancellation during collection
-        if cancelled.load(Ordering::Relaxed) {
-            return Err(SegmentWorkerError::FrameWorkerError(
-                FrameWorkerError::WorkerDisconnected,
-            ));
-        }
-
-        match out_rx.recv() {
-            Ok(Ok(frame)) => {
-                received += 1;
-                eprintln!(
-                    "[DECRYPT SEGMENT] received frame {} (type {:?})",
-                    frame.frame_index, frame.frame_type
+            // Validate header first (cheap fail-fast)
+            if let Err(e) = segment.header.validate(&segment.wire) {
+                error!(
+                    "[DECRYPT SEGMENT WORKER] header validation failed: {:?}",
+                    e
                 );
 
-                // Merge frame telemetry
-                stage_times.merge(&frame.stage_times);
+                let err = SegmentWorkerError::SegmentError(e.clone());
 
-                // Categorize frame by type
-                match frame.frame_type {
-                    FrameType::Data => data_frames.push(frame),
-                    FrameType::Digest => {
-                        if digest_frame.is_some() {
-                            return Err(SegmentWorkerError::InvalidSegment(
-                                "Multiple digest frames detected".into(),
-                            ));
-                        }
-                        digest_frame = Some(frame);
+                let _ = tx.send(Err(err.clone()));
+                let _ = fatal_tx.send(StreamError::Segment(e));
+
+                cancelled.store(true, Ordering::Relaxed);
+                break;
+            }
+
+            // 🔥 Fully lock-free segment processing
+            match decrypt_segment_lockfree(
+                &crypto,
+                &segment,
+                cancelled.clone(),
+            ) {
+                Ok(decrypted_segment) => {
+                    if let Err(e) = tx.send(Ok(decrypted_segment)) {
+                        error!(
+                            "[DECRYPT SEGMENT WORKER] tx send failed, receiver disconnected"
+                        );
+
+                        let _ = fatal_tx.send(StreamError::SegmentWorker(
+                            SegmentWorkerError::StateError(e.to_string()),
+                        ));
+
+                        cancelled.store(true, Ordering::Relaxed);
+                        break;
                     }
-                    FrameType::Terminator => {
-                        if terminator_frame.is_some() {
-                            return Err(SegmentWorkerError::InvalidSegment(
-                                "Multiple terminator frames detected".into(),
-                            ));
-                        }
-                        terminator_frame = Some(frame);
-                    }
+
+                    self.log_manager.console(
+                        ("[DECRYPT SEGMENT]: ".to_string()
+                            + &segment_idx.to_string()
+                            + " successfully decrypted")
+                            .into(),
+                    );
+                }
+
+                Err(e) => {
+                    // This prints raw arrays (Debug)
+                    // error!("[DECRYPT SEGMENT WORKER] processing error: {:?}", e);
+
+                    // This prints hex strings (Display)
+                    error!("[DECRYPT SEGMENT WORKER] processing error: {}", e);
+
+                    let _ = fatal_tx.send(StreamError::SegmentWorker(e.clone()));
+                    cancelled.store(true, Ordering::Relaxed);
+                    let _ = tx.send(Err(e));
+                    break;
                 }
             }
-            Ok(Err(e)) => {
-                // Frame worker returned an error
-                eprintln!("[DECRYPT SEGMENT] frame worker error: {:?}", e);
-                return Err(e.into());
-            }
-            Err(_) => {
-                // Frame output channel closed unexpectedly
-                eprintln!("[DECRYPT SEGMENT] frame worker channel disconnected");
-                return Err(SegmentWorkerError::FrameWorkerError(
-                    FrameWorkerError::WorkerDisconnected,
-                ));
-            }
         }
+
+        debug!("[DECRYPT SEGMENT WORKER] exiting");
+        drop(tx);
     }
 
-    // Validate frame counts (data frames + digest + terminator)
-    if (data_frames.len() + 2) != frame_count {
-        eprintln!(
-            "[DECRYPT SEGMENT] frame count mismatch: data={}, total={}",
-            data_frames.len(),
-            frame_count
-        );
-        return Err(SegmentWorkerError::InvalidSegment(
-            format!(
-                "Expected {} frames (data+digest+terminator), got {}+2",
-                frame_count,
-                data_frames.len()
-            ),
-        ));
-    }
+    // # 🔥 What Changed Architecturally
 
-    // ---- Stage 4: Sort data frames by index ----
-    data_frames.sort_unstable_by_key(|f| f.frame_index);
-    eprintln!(
-        "[DECRYPT SEGMENT] sorted {} data frames",
-        data_frames.len()
-    );
+    // Before:
 
-    let data_frame_count = data_frames.len() as u32;
-    let segment_index = data_frames
-        .first()
-        .map(|f| f.segment_index)
-        .unwrap_or(input.header.segment_index());
+    // ```
+    // Segment Worker
+    //     ↓
+    // Channels
+    //     ↓
+    // Frame Workers
+    //     ↓
+    // Channel fan-in
+    //     ↓
+    // Segment assembly
+    // ```
 
-    // ---- Stage 5: Verify segment digest ----
-    let start = Instant::now();
+    // Now:
 
-    let digest_frame_data = digest_frame.ok_or(SegmentWorkerError::MissingDigestFrame)?;
+    // ```
+    // Segment Worker
+    //     ↓
+    // decrypt_segment_lockfree()
+    //     ↓
+    // Global FRAME_EXECUTOR
+    //     ↓
+    // OnceCell result slots
+    //     ↓
+    // Spin barrier
+    //     ↓
+    // Deterministic assembly
+    // ```
 
-    // Validate digest frame is at expected position
-    if digest_frame_data.frame_index != data_frame_count {
-        eprintln!(
-            "[DECRYPT SEGMENT] digest frame index mismatch: expected {}, got {}",
-            data_frame_count, digest_frame_data.frame_index
-        );
-        return Err(SegmentWorkerError::InvalidSegment(
-            "Digest frame at incorrect position".into(),
-        ));
-    }
+    // # ✅ Benefits
 
-    // Decode digest payload
-    let digest_frame_payload = DigestFrame::decode(&digest_frame_data.plaintext)?;
-    eprintln!(
-        "[DECRYPT SEGMENT] digest frame decoded, verifying segment {}",
-        segment_index
-    );
+    // ### 1. No per-segment worker spawning
 
-    // Initialize digest verifier
-    let mut verifier = SegmentDigestVerifier::new(
-        digest_alg.clone(),
-        segment_index,
-        data_frame_count,
-        digest_frame_payload.digest,
-    );
+    // Frame workers are global now.
 
-    // Update verifier with all frame ciphertexts
-    for frame in &data_frames {
-        // Track overhead: frame header
-        counters.bytes_overhead += FrameHeader::LEN as u64;
-        // Track compressed/plaintext size
-        counters.bytes_compressed += frame.plaintext.len() as u64;
+    // ### 2. No channel contention
 
-        // Update digest with frame ciphertext
-        verifier.update_frame(frame.frame_index, frame.ciphertext());
-    }
+    // Removed two hot channels per segment.
 
-    counters.frames_data = data_frame_count as u64;
+    // ### 3. No out_rx blocking deadlocks
 
-    // Finalize and verify digest (fails if mismatch)
-    verifier.finalize()?;
-    counters.add_digest(digest_frame_data.plaintext.len());
+    // Our previous hang was very likely here.
 
-    stage_times.add(Stage::Digest, start.elapsed());
-    eprintln!(
-        "[DECRYPT SEGMENT] digest verified for segment {}",
-        segment_index
-    );
+    // ### 4. Symmetric with encrypt side
 
-    // ---- Stage 6: Validate terminator frame ----
-    let start = Instant::now();
+    // Both paths now use the same execution philosophy.
 
-    let terminator_frame_data =
-        terminator_frame.ok_or(SegmentWorkerError::MissingTerminatorFrame)?;
+    // ### 5. Cleaner cancellation model
 
-    // Validate terminator frame is at expected position (last frame)
-    if terminator_frame_data.frame_index != data_frame_count + 1 {
-        eprintln!(
-            "[DECRYPT SEGMENT] terminator frame index mismatch: expected {}, got {}",
-            data_frame_count + 1,
-            terminator_frame_data.frame_index
-        );
-        return Err(SegmentWorkerError::InvalidSegment(
-            "Terminator frame must be the last frame".into(),
-        ));
-    }
+    // Single atomic flag.
 
-    counters.add_terminator(terminator_frame_data.plaintext.len());
-    eprintln!(
-        "[DECRYPT SEGMENT] terminator frame validated for segment {}",
-        segment_index
-    );
+    // # ⚠ Important Reminder
 
-    stage_times.add(Stage::Validate, start.elapsed());
+    // `decrypt_segment_lockfree()` must:
 
-    // ---- Stage 7: Reassemble plaintext ----
-    let start = Instant::now();
+    // * Always increment completion counter
+    // * Always respect `cancelled`
+    // * Never block
+    // * Never panic
 
-    // Preallocate buffer for all plaintext
-    let total_plaintext_len: usize = data_frames.iter().map(|f| f.plaintext.len()).sum();
-    let mut plaintext_out = Vec::with_capacity(total_plaintext_len);
+    // Otherwise this outer worker can hang.
 
-    // Concatenate all data frame plaintext in order
-    for frame in data_frames {
-        plaintext_out.extend_from_slice(&frame.plaintext);
-    }
+    // # 🧠 Final State
 
-    let bytes = Bytes::from(plaintext_out);
+    // Our decrypt worker is now:
 
-    // Note: We can validate that header.bytes_len == bytes.len()
-    // to ensure plaintext length matches header expectation
+    // * Single-threaded orchestration
+    // * Lock-free segment execution
+    // * Global execution pool driven
+    // * Deadlock-resistant
+    // * Production-ready parallel crypto pipeline
 
-    stage_times.add(Stage::Write, start.elapsed());
+    // TODO:
 
-    eprintln!(
-        "[DECRYPT SEGMENT] completed segment {} ({} bytes plaintext from {} frames)",
-        segment_index,
-        bytes.len(),
-        data_frame_count
-    );
+    // * We can remove `fatal_tx` entirely and unify error propagation
+    // * Or convert whole pipeline to a structured `PipelineRuntime`
+    // * Or remove spin barrier with work-stealing join
 
-    Ok(DecryptedSegment {
-        header: input.header,
-        bytes,
-        counters,
-        stage_times,
-    })
 }
-

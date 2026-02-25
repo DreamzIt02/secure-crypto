@@ -9,7 +9,7 @@ use crate::{
     crypto::{CryptoError, DigestAlg, derive_session_key_32}, 
     headers::HeaderV1, recovery::AsyncLogManager, 
     stream_v2::{io::{InputSource, OutputSink, PayloadReader, open_input, open_output}, 
-    parallelism::{HybridParallelismProfile, ParallelismConfig}, pipeline::{PipelineConfig, run_decrypt_pipeline, run_encrypt_pipeline}, 
+    parallelism::{HybridParallelismProfile, ParallelismConfig}, pipeline::{PipelineConfig, decrypt_pipeline, encrypt_pipeline}, 
     segment_worker::{DecryptContext, EncryptContext}}, 
     telemetry::TelemetrySnapshot, 
     types::StreamError
@@ -191,7 +191,7 @@ pub fn encrypt_stream_v2(
     let crypto = Arc::new(crypto);
 
     // Call pipeline
-    let mut snapshot = run_encrypt_pipeline(
+    let mut snapshot = encrypt_pipeline(
         &mut payload_reader,
         writer,
         crypto,
@@ -237,7 +237,7 @@ pub fn decrypt_stream_v2(
     let crypto = Arc::new(crypto);
 
     // Call pipeline
-    let mut snapshot = run_decrypt_pipeline(
+    let mut snapshot = decrypt_pipeline(
         &mut payload_reader,
         writer,
         crypto,

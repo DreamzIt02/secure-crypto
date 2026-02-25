@@ -9,13 +9,13 @@ mod telemetry_decrypt_tests {
     use crypto_core::recovery::AsyncLogManager;
     use crypto_core::stream_v2::io::PayloadReader;
     use crypto_core::stream_v2::parallelism::HybridParallelismProfile;
-    use crypto_core::stream_v2::pipeline::{PipelineConfig, run_decrypt_pipeline, run_encrypt_pipeline};
+    use crypto_core::stream_v2::pipeline::{PipelineConfig, decrypt_pipeline, encrypt_pipeline};
     use crypto_core::stream_v2::segment_worker::{DecryptContext, EncryptContext};
     use crypto_core::telemetry::TelemetrySnapshot;
 
     fn setup_enc_context(alg: DigestAlg) -> (EncryptContext, HybridParallelismProfile, Arc<AsyncLogManager>) {
         let header = HeaderV1::test_header(); // Mock header
-        let profile = HybridParallelismProfile::dynamic(header.chunk_size as u32, 0.50, 64);
+        let profile = HybridParallelismProfile::semi_dynamic(header.chunk_size as u32, 0.50, 64);
        // Create a Vec of 32 bytes
         let session_key = vec![0x42u8; KEY_LEN_32];
         let log_manager = Arc::new(AsyncLogManager::new("test_audit.log", 100).unwrap());
@@ -29,7 +29,7 @@ mod telemetry_decrypt_tests {
         (context, profile, log_manager)
     }
     fn setup_dec_context(alg: DigestAlg, header: &HeaderV1) -> (DecryptContext, HybridParallelismProfile, Arc<AsyncLogManager>) {
-        let profile = HybridParallelismProfile::dynamic(header.chunk_size as u32, 0.50, 64);
+        let profile = HybridParallelismProfile::semi_dynamic(header.chunk_size as u32, 0.50, 64);
        // Create a Vec of 32 bytes
         let session_key = vec![0x42u8; KEY_LEN_32];
         let log_manager = Arc::new(AsyncLogManager::new("test_audit.log", 100).unwrap());
@@ -51,7 +51,7 @@ mod telemetry_decrypt_tests {
         let (enc_ctx, enc_profile, log_manager) = setup_enc_context(DigestAlg::Blake3);
         let config_pipe = PipelineConfig::new(enc_profile.clone(), None);
 
-        let _ = run_encrypt_pipeline(
+        let _ = encrypt_pipeline(
             &mut enc_reader,
             &mut enc_writer,
             Arc::new(enc_ctx),
@@ -73,7 +73,7 @@ mod telemetry_decrypt_tests {
         let (dec_ctx, dec_profile, log_manager) = setup_dec_context(DigestAlg::Blake3, &stream_header);
         let config_pipe = PipelineConfig::new(dec_profile.clone(), None);
 
-        run_decrypt_pipeline(
+        decrypt_pipeline(
             &mut dec_reader,
             &mut dec_writer,
             Arc::new(dec_ctx),
@@ -88,7 +88,7 @@ mod telemetry_decrypt_tests {
         let (enc_ctx, profile, log_manager) = setup_enc_context(DigestAlg::Blake3);
         let config_pipe = PipelineConfig::new(profile.clone(), None);
 
-        let snapshot = run_encrypt_pipeline(
+        let snapshot = encrypt_pipeline(
             &mut reader,
             &mut writer,
             Arc::new(enc_ctx),
@@ -114,7 +114,7 @@ mod telemetry_decrypt_tests {
         let (dec_ctx, profile, log_manager) = setup_dec_context(DigestAlg::Blake3, &stream_header);
         let config_pipe = PipelineConfig::new(profile.clone(), None);
 
-        run_decrypt_pipeline(
+        decrypt_pipeline(
             &mut reader,          // reader now positioned after HeaderV1
             &mut writer,
             Arc::new(dec_ctx),
@@ -200,7 +200,7 @@ mod telemetry_decrypt_tests {
         let (dec_ctx, profile, log_manager) = setup_dec_context(DigestAlg::Blake3, &HeaderV1::test_header());
         let config_pipe = PipelineConfig::new(profile.clone(), None);
 
-        let result = run_decrypt_pipeline(
+        let result = decrypt_pipeline(
             &mut reader,
             &mut writer,
             Arc::new(dec_ctx),

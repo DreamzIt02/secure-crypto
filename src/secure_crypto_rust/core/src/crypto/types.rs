@@ -23,7 +23,7 @@ pub struct AadHeader {
     pub segment_index: u32,
     pub frame_index: u32,
     /// Plaintext length in this frame (DATA only; last frame may be < chunk_size).
-    pub plaintext_len: u32,
+    pub payload_len: u32,
 }
 
 impl AadHeader {

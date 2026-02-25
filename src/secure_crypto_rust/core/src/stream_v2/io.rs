@@ -8,6 +8,7 @@ use std::path::PathBuf;
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 use bytes::Bytes;
+use tracing::{debug, error};
 
 use crate::headers::{HeaderV1};
 use crate::stream_v2::segment_worker::{DecryptedSegment, EncryptedSegment};
@@ -195,7 +196,7 @@ pub fn read_segment<R: Read>(
 
     let header = decode_segment_header(&hdr_buf).map_err(StreamError::Segment)?;
     // 🔍 Debug header summary
-    // eprintln!("[IO:DECRYPT] Parsed header: {}", header.summary());
+    // debug!("[IO:DECRYPT] Parsed header: {}", header.summary());
 
     // Allocate wire buffer according to header
     let mut wire = vec![0u8; header.wire_len() as usize];
@@ -205,7 +206,7 @@ pub fn read_segment<R: Read>(
 
     // ✅ Special case: final empty segment
     // if header.flags.contains(SegmentFlags::FINAL_SEGMENT) && header.wire_len == 0 {
-    //     eprintln!("[IO:DECRYPT] Empty FINAL_SEGMENT detected at index {}", header.segment_index);
+    //     debug!("[IO:DECRYPT] Empty FINAL_SEGMENT detected at index {}", header.segment_index);
     //     return Ok(Some((header, Bytes::new())));
     // }
 
@@ -259,7 +260,7 @@ impl<'a, W: Write> OrderedEncryptedWriter<'a, W> {
     pub fn push(&mut self, segment: EncryptedSegment) -> Result<(), StreamError> {
         // Accept empty wire if FINAL_SEGMENT is set
         if segment.header.flags().contains(SegmentFlags::FINAL_SEGMENT) && segment.wire.is_empty() {
-            eprintln!("[ENCRYPT WRITER] Final empty segment {} detected", segment.header.segment_index());
+            debug!("[ENCRYPT WRITER] Final empty segment {} detected", segment.header.segment_index());
             self.final_index = Some(segment.header.segment_index());
         }
         // Don’t write immediately — enqueue it
@@ -268,6 +269,8 @@ impl<'a, W: Write> OrderedEncryptedWriter<'a, W> {
     }
 
     pub fn finish(&mut self) -> Result<(), StreamError> {
+        debug!("[ENCRYPT WRITER] finish() called, pending: {}, next: {}", self.pending.len(), self.next);
+        
         // Flush any pending segments in order
         while let Some(seg) = self.pending.remove(&self.next) {
             self.write(seg)?;
@@ -279,9 +282,10 @@ impl<'a, W: Write> OrderedEncryptedWriter<'a, W> {
             return Err(StreamError::Validation("Missing final segment".into()));
         }
 
+        debug!("[ENCRYPT WRITER] finish() completed successfully");
         Ok(())
     }
-    
+
     fn flush_ready(&mut self) -> Result<(), StreamError> {
         while let Some(seg) = self.pending.remove(&self.next) {
             self.write(seg)?;
@@ -291,12 +295,31 @@ impl<'a, W: Write> OrderedEncryptedWriter<'a, W> {
     }
 
     fn write(&mut self, segment: EncryptedSegment) -> Result<(), StreamError> {
-        eprintln!("[ENCRYPT WRITER] Final writing segment {}", segment.header.segment_index());
+        let idx = segment.header.segment_index();
+        debug!("[ENCRYPT WRITER] Writing segment {}", idx);
+        
         let segment_enc = encode_segment(&segment.header, &segment.wire)
             .map_err(|e| StreamError::Segment(e))?;
-        eprintln!("[ENCRYPT WRITER] Final encoded segment {} bytes: {}", segment_enc.len(), segment.header.summary());
-        self.out.write_all(&segment_enc)?;
-        Ok(())
+        
+        debug!(
+            "[ENCRYPT WRITER] Encoded segment {} ({} bytes): {}",
+            idx, segment_enc.len(), segment.header.summary()
+        );
+
+        // self.out.write_all(&segment_enc)?;  // ⚠️ This converts io::Error to StreamError
+        // ✅ CRITICAL: Explicit write_all with better error context
+        match self.out.write_all(&segment_enc) {
+            Ok(()) => {
+                debug!("[ENCRYPT WRITER] Successfully wrote segment {}", idx);
+                Ok(())
+            }
+            Err(e) => {
+                error!("[ENCRYPT WRITER] ❌ WRITE FAILED for segment {}: {}", idx, e);
+                // Ensure error is properly wrapped
+                Err(StreamError::from(e))
+            }
+        }
+        // Ok(())
     }
 }
 
@@ -319,14 +342,14 @@ impl<'a, W: Write> OrderedPlaintextWriter<'a, W> {
     pub fn push(&mut self, segment: &DecryptedSegment) -> Result<(), StreamError> {
         // Accept empty wire if FINAL_SEGMENT is set
         if segment.header.flags().contains(SegmentFlags::FINAL_SEGMENT) && segment.bytes.is_empty() {
-            eprintln!("[PLAINTEXT WRITER] Final empty segment {} detected", segment.header.segment_index());
+            debug!("[PLAINTEXT WRITER] Final empty segment {} detected", segment.header.segment_index());
             self.final_index = Some(segment.header.segment_index());
 
             // Enqueue the final marker like any other segment
         }
 
         // Normal push logic
-        eprintln!("[PLAINTEXT WRITER] Queuing segment {}", segment.header.segment_index());
+        debug!("[PLAINTEXT WRITER] Queuing segment {}", segment.header.segment_index());
         self.pending.insert(segment.header.segment_index(), segment.clone());
         self.flush_ready()
     }
@@ -343,7 +366,7 @@ impl<'a, W: Write> OrderedPlaintextWriter<'a, W> {
             return Err(StreamError::Validation("Missing final segment".into()));
         }
 
-        eprintln!("[PLAINTEXT WRITER] Finished, final marker index {:?}", self.final_index);
+        debug!("[PLAINTEXT WRITER] Finished, final marker index {:?}", self.final_index);
         Ok(())
     }
 
@@ -356,7 +379,7 @@ impl<'a, W: Write> OrderedPlaintextWriter<'a, W> {
     }
 
     fn write(&mut self, segment: DecryptedSegment) -> Result<(), StreamError> {
-        eprintln!("[PLAINTEXT WRITER] Writing segment {}", segment.header.segment_index());
+        debug!("[PLAINTEXT WRITER] Writing segment {}", segment.header.segment_index());
         self.out.write_all(&segment.bytes)?;
         Ok(())
     }

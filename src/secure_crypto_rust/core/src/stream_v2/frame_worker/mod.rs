@@ -16,6 +16,11 @@
 pub mod types;
 pub mod encrypt;
 pub mod decrypt;
+pub mod global_worker;
+
+pub use global_worker:: {
+    FRAME_EXECUTOR
+};
 
 pub use types::{
     FrameInput,

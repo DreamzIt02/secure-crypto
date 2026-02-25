@@ -14,6 +14,8 @@
 pub mod types;
 pub mod encrypt;
 pub mod decrypt;
+pub mod enc_helpers;
+pub mod dec_helpers;
 
 pub use types::{
     EncryptSegmentInput,

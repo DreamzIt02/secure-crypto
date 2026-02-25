@@ -340,14 +340,14 @@ TODO:
 1. **`core.rs` (Public API)**  
 
     * User calls `encrypt_stream_v2`.  
-    * Sets up context, opens input/output, and calls `run_encrypt_pipeline`.
+    * Sets up context, opens input/output, and calls `encrypt_pipeline`.
 
 2. **`pipeline.rs` (Pipeline Orchestration)**
 
     * Writes stream header.  
     * Spawns reader thread → produces `EncryptSegmentInput`.  
     * Compression workers (optional).  
-    * Segment workers (`EncryptSegmentWorker::run_v2`) consume segments.  
+    * Segment workers (`EncryptSegmentWorker::run_v1`) consume segments.  
     * Writer consumes `EncryptedSegment` results.
 
 3. **`encrypt.rs` (Segment Worker)**
@@ -403,12 +403,12 @@ Perfect — with this last piece (`decrypt_frame.rs`), we now have the **complet
 
 1. **`core_decrypt.rs` (Public API)**  
    * User calls `decrypt_stream_v2`.  
-   * Sets up context, opens input/output, and calls `run_decrypt_pipeline`.
+   * Sets up context, opens input/output, and calls `decrypt_pipeline`.
 
 2. **`pipeline_decrypt.rs` (Pipeline Orchestration)**  
    * Validates stream header.  
    * Spawns reader thread → produces `DecryptSegmentInput`.  
-   * Segment workers (`DecryptSegmentWorker::run_v2`) consume segments.  
+   * Segment workers (`DecryptSegmentWorker::run_v1`) consume segments.  
    * Adapter forwards results to decompression workers.  
    * Writer consumes `DecryptedSegment` results and writes plaintext in order.
 

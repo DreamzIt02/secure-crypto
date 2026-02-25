@@ -4,7 +4,7 @@ mod tests {
 
     use bytes::Bytes;
     use crossbeam::channel::{self, bounded};
-    use crypto_core::{crypto::DigestAlg, stream_v2::{frame_worker::{EncryptedFrame, FrameInput, FrameWorkerError}, segment_worker::{EncryptSegmentInput, encrypt::process_encrypt_segment_1}, segmenting::types::SegmentFlags}, telemetry::{StageTimes, TelemetryCounters}};
+    use crypto_core::{crypto::DigestAlg, stream_v2::{frame_worker::{EncryptedFrame, FrameInput, FrameWorkerError}, segment_worker::{EncryptSegmentInput, enc_helpers::process_encrypt_segment_1}, segmenting::types::SegmentFlags}, telemetry::{StageTimes, TelemetryCounters}};
 
     fn setup_channels() -> (
         channel::Sender<FrameInput>,
